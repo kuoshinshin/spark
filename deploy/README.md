@@ -1,76 +1,105 @@
-# 阿里云 ECS + GitHub 部署说明
+# 阿里云 ECS + GitHub 部署（spark 仓库）
 
-本目录提供 **ECS 上一键更新** 脚本，以及 **GitHub Actions 经 SSH 自动部署** 工作流。
+本目录提供：**ECS 首次初始化**、**一键更新**、**Nginx 示例**、**GitHub Actions SSH 自动部署**。
 
-## 前置条件
+仓库：**https://github.com/kuoshinshin/spark**  
+建议服务器目录：**`/opt/spark`**（与 Actions 默认 `DEPLOY_PATH` 一致）。
 
-- ECS 已安装：**Git、Node.js 20+（建议 LTS）、npm、PM2**（`npm i -g pm2`）、**Nginx**（托管静态页并反代 `/api`）。
-- 已在 `xinghuo-backend` 目录创建 **`.env`**（生产密钥、数据库、JWT 等），可参考仓库内 `xinghuo-backend/.env.example`。
-- 仓库在服务器上的路径与 GitHub Actions 里配置的 **`DEPLOY_PATH`** 一致（默认 `/opt/newPUBG`）。
+---
 
-## 首次在 ECS 上克隆
+## 一、ECS 上继续部署（你当前要做的）
+
+### 1. 安装依赖（Alibaba Cloud Linux / CentOS 示例）
 
 ```bash
-sudo mkdir -p /opt/newPUBG
-sudo chown -R "$USER:$USER" /opt/newPUBG
-cd /opt/newPUBG
-git clone https://github.com/<你的组织或用户名>/<仓库名>.git .
-# 或使用 SSH clone；保证根目录下即有 xinghuo/ 与 xinghuo-backend/
+sudo yum install -y git nginx || sudo apt-get update && sudo apt-get install -y git nginx
+# Node.js 20：用发行版文档或 https://github.com/nodesource/distributions 安装
+curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -   # EL 系示例
+sudo yum install -y nodejs
+sudo npm i -g pm2
 ```
 
-配置后端环境变量：
+### 2. 首次拉代码并构建（二选一）
+
+**方式 A：一键脚本（推荐）**
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/kuoshinshin/spark/main/deploy/ecs-first-run.sh -o /tmp/ecs-first-run.sh
+bash /tmp/ecs-first-run.sh
+```
+
+**方式 B：手动**
+
+```bash
+sudo mkdir -p /opt/spark && sudo chown -R "$USER:$USER" /opt/spark
+cd /opt/spark
+git clone https://github.com/kuoshinshin/spark.git .
 cp xinghuo-backend/.env.example xinghuo-backend/.env
-nano xinghuo-backend/.env   # 填写生产库、JWT_SECRET、CORS_ORIGIN 等
-```
-
-配置 Nginx（示例见 `nginx-xinghuo.conf.example`），`root` 与下面 **`WEB_ROOT`** 一致。
-
-## 一键更新（在 ECS 上执行）
-
-在仓库根目录：
-
-```bash
-chmod +x deploy/aliyun-ecs.sh   # 仅需一次
+nano xinghuo-backend/.env   # 必填：数据库、JWT_SECRET、生产 CORS 等
+npm i -g pm2
+chmod +x deploy/aliyun-ecs.sh
 bash deploy/aliyun-ecs.sh
 ```
 
-可选环境变量：
+### 3. 配置生产 `.env`
 
-| 变量 | 含义 | 默认 |
-|------|------|------|
-| `DEPLOY_BRANCH` | 拉取的分支 | `main` |
-| `WEB_ROOT` | 前端 `dist` 同步目标目录 | `$HOME/www/xinghuo` |
+参考 `xinghuo-backend/.env.example`，至少保证生产有 **`JWT_SECRET`**、数据库连接、**`CORS_ORIGIN`**（你的前端 `https://域名`）。
 
-若 `WEB_ROOT` 在系统目录（如 `/var/www/xinghuo`），脚本会尝试 `sudo rsync`，请为部署用户配置相应权限或改用家目录并在 Nginx 里指向该路径。
+### 4. Nginx
 
-## GitHub Actions 自动部署
+```bash
+sudo cp /opt/spark/deploy/nginx-xinghuo.conf.example /etc/nginx/conf.d/spark.conf
+sudo nano /etc/nginx/conf.d/spark.conf   # 修改 server_name、root（与 WEB_ROOT 一致，默认用户下 ~/www/xinghuo）
+sudo nginx -t && sudo systemctl enable nginx && sudo systemctl reload nginx
+```
 
-1. 将本仓库推送到 GitHub，**默认分支名为 `main`**（若不同请改 `.github/workflows/deploy-ecs.yml` 里的 `branches`）。
-2. 在 GitHub：**Settings → Secrets and variables → Actions → New repository secret** 添加：
+### 5. 安全组与防火墙
+
+- 阿里云安全组放行 **80 / 443**（及 SSH 22）。  
+- 本机 `firewalld`/`ufw` 若开启，同样放行 HTTP/HTTPS。
+
+### 6. 以后每次更新代码
+
+在 **`/opt/spark`** 下：
+
+```bash
+cd /opt/spark && bash deploy/aliyun-ecs.sh
+```
+
+或由下面 GitHub Actions 在 **push `main`** 时自动执行。
+
+---
+
+## 二、GitHub Actions 自动部署
+
+在仓库 **Settings → Secrets and variables → Actions** 添加：
 
 | Secret | 必填 | 说明 |
 |--------|------|------|
 | `DEPLOY_HOST` | 是 | ECS 公网 IP 或域名 |
-| `DEPLOY_USER` | 是 | SSH 登录用户名 |
-| `DEPLOY_SSH_KEY` | 是 | 该用户私钥全文（`-----BEGIN ... PRIVATE KEY-----` 至结尾） |
-| `DEPLOY_PATH` | 否 | 服务器上仓库根目录绝对路径，未设置时脚本内默认 `/opt/newPUBG` |
+| `DEPLOY_USER` | 是 | SSH 用户名 |
+| `DEPLOY_SSH_KEY` | 是 | 私钥全文（用于 GitHub 连 ECS，**不是** GitHub 账号密码） |
+| `DEPLOY_PATH` | 否 | 默认 **`/opt/spark`** |
 
-3. 对 `main` 的 **push** 会触发部署；也可在 **Actions** 里手动 **Run workflow**。
+**注意**：ECS 上需把该私钥对应的**公钥**写入 `~/.ssh/authorized_keys`（部署用户），否则 Actions 无法 SSH。
 
-**安全建议**：为 GitHub 单独生成一对仅用于拉代码/执行部署的 SSH 密钥，在 ECS 的 `~/.ssh/authorized_keys` 中只授权公钥；不要使用个人主密钥。
+配置完成后：**再 push 一次 `main`**，或到 **Actions** 里手动 **Run workflow**。
 
-## 生产前端 API 地址
+---
 
-未设置 `VITE_API_BASE_URL` 时，生产构建会使用 **同源 `/api`**，与示例 Nginx 一致。若前后端分域，请在构建前导出：
+## 三、脚本环境变量（`aliyun-ecs.sh`）
 
-```bash
-export VITE_API_BASE_URL=https://api.example.com/api
-```
+| 变量 | 含义 | 默认 |
+|------|------|------|
+| `DEPLOY_BRANCH` | 拉取分支 | `main` |
+| `WEB_ROOT` | 前端 `dist` 同步目录 | `$HOME/www/xinghuo` |
 
-并在 `aliyun-ecs.sh` 中于 `npm run build` 前加入该变量（可自行改脚本）。
+---
 
-## PM2
+## 四、生产前端 API
 
-进程名：`xinghuo-api`。常用命令：`pm2 logs xinghuo-api`、`pm2 status`。
+未设置 `VITE_API_BASE_URL` 时，构建产物使用**同源 `/api`**，与示例 Nginx 一致。
+
+## 五、PM2
+
+进程名：`xinghuo-api`。常用：`pm2 logs xinghuo-api`、`pm2 status`。
