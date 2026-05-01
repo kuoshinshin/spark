@@ -1,5 +1,5 @@
-# 复制到 /etc/nginx/conf.d/xinghuo.conf 后调整 server_name、证书路径与 root
-# 前端构建产物目录须与 aliyun-ecs.sh 的 WEB_ROOT 一致（例：/home/deploy/www/xinghuo）
+# 复制到 /etc/nginx/conf.d/spark.conf 后调整 server_name、证书路径与 root
+# 前端目录须与 deploy/aliyun-ecs.sh 的 WEB_ROOT 一致（默认 ~/www/xinghuo，即 /home/<用户>/www/xinghuo）
 
 upstream xinghuo_backend {
     server 127.0.0.1:3000;
