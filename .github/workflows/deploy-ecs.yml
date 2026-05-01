@@ -1,0 +1,41 @@
+# 推送 main 或通过 Actions 手动运行：SSH 到 ECS 执行 deploy/aliyun-ecs.sh
+#
+# 在 GitHub 仓库 Settings → Secrets and variables → Actions 中配置：
+#   DEPLOY_HOST      ECS 公网 IP 或域名
+#   DEPLOY_USER      SSH 用户名（如 root、deploy）
+#   DEPLOY_SSH_KEY   对应用户的私钥全文（含 -----BEGIN ...）
+# 可选：
+#   DEPLOY_SSH_PORT  默认 22
+#   DEPLOY_PATH      服务器上仓库绝对路径，默认 /opt/newPUBG
+
+name: Deploy to Aliyun ECS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-ecs
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH deploy
+        uses: appleboy/ssh-action@v1.2.1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            DEPLOY_PATH='${{ secrets.DEPLOY_PATH }}'
+            if [ -z "$DEPLOY_PATH" ]; then
+              DEPLOY_PATH="/opt/newPUBG"
+            fi
+            cd "$DEPLOY_PATH"
+            bash deploy/aliyun-ecs.sh

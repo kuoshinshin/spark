@@ -1,0 +1,27 @@
+# 依赖与构建产物
+node_modules/
+dist/
+*.local
+
+# 环境变量与密钥（切勿提交）
+.env
+.env.*
+!.env.example
+xinghuo-backend/.env
+xinghuo/.env
+xinghuo/.env.*
+
+# 日志与系统文件
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# 临时
+*.swp
+*.swo
