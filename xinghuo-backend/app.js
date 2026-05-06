@@ -116,6 +116,28 @@ async function startServer() {
         await connection.execute(ddl);
       }
     };
+    // 老版本 init-db 创建的 users 表缺少 email，但注册逻辑会写入 email
+    await ensureColumn(
+      'users',
+      'email',
+      "ALTER TABLE users ADD COLUMN email VARCHAR(191) NULL AFTER username"
+    );
+    // 回填占位邮箱，避免后续加 UNIQUE 时因 NULL/重复失败
+    await connection.execute(`
+      UPDATE users
+      SET email = CONCAT(
+        REPLACE(REPLACE(REPLACE(account, '@', '_at_'), ' ', '_'), '/', '_'),
+        '@users.local'
+      )
+      WHERE (email IS NULL OR TRIM(email) = '')
+        AND account IS NOT NULL
+        AND TRIM(account) <> ''
+    `);
+    await ensureIndex(
+      'users',
+      'uniq_users_email',
+      'ALTER TABLE users ADD UNIQUE KEY uniq_users_email (email)'
+    );
     await ensureColumn('users', 'real_name', 'ALTER TABLE users ADD COLUMN real_name VARCHAR(100) NULL AFTER username');
     await ensureColumn('users', 'phone', 'ALTER TABLE users ADD COLUMN phone VARCHAR(30) NULL AFTER real_name');
     await ensureColumn('users', 'address', 'ALTER TABLE users ADD COLUMN address VARCHAR(255) NULL AFTER phone');

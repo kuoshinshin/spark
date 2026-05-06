@@ -11,6 +11,7 @@ async function initDatabase() {
         id INT AUTO_INCREMENT PRIMARY KEY,
         account VARCHAR(50) NOT NULL UNIQUE,
         username VARCHAR(50) NOT NULL,
+        email VARCHAR(191) NOT NULL UNIQUE,
         real_name VARCHAR(100),
         phone VARCHAR(30),
         address VARCHAR(255),
