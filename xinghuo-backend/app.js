@@ -357,6 +357,16 @@ async function startServer() {
       'CREATE INDEX idx_matches_active_registration ON matches (is_active_registration, status, start_time)'
     );
     if (await tableExists('team_players')) {
+      await ensureColumn(
+        'team_players',
+        'player_card_uuid',
+        'ALTER TABLE team_players ADD COLUMN player_card_uuid VARCHAR(36) NULL AFTER user_id'
+      );
+      await ensureColumn(
+        'team_players',
+        'joined_at',
+        'ALTER TABLE team_players ADD COLUMN joined_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP AFTER is_current_user'
+      );
       await connection.execute("UPDATE team_players SET user_id = NULL WHERE user_id IS NOT NULL AND TRIM(user_id) = ''");
       await connection.execute(`
         UPDATE team_players tp
