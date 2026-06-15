@@ -16,7 +16,7 @@ async function initDatabase() {
         phone VARCHAR(30),
         address VARCHAR(255),
         password VARCHAR(255) NOT NULL,
-        avatar VARCHAR(255),
+        avatar VARCHAR(2048),
         role ENUM('user', 'admin', 'superadmin') DEFAULT 'user',
         dark_mode BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

@@ -1,10 +1,25 @@
 const express = require('express');
 const UserController = require('../controllers/userController');
 const { verifyToken, verifyUser, verifyAdmin, verifySuperAdmin } = require('../middleware/auth');
+const { avatarUpload } = require('../middleware/uploadAvatar');
 const router = express.Router();
+
+const handleAvatarUpload = (req, res, next) => {
+  avatarUpload.single('avatar')(req, res, (err) => {
+    if (err) {
+      let msg = err.message || '上传失败';
+      if (err.code === 'LIMIT_FILE_SIZE') msg = '图片大小不能超过 2MB';
+      return res.status(400).json({ error: msg });
+    }
+    next();
+  });
+};
 
 // 获取用户信息（需要认证）
 router.get('/info', verifyToken, verifyUser, UserController.getUserInfo);
+
+// 上传头像（multipart，字段名 avatar）
+router.post('/avatar', verifyToken, verifyUser, handleAvatarUpload, UserController.uploadAvatar);
 
 // 更新用户信息（需要认证）
 router.put('/info', verifyToken, verifyUser, UserController.updateUserInfo);

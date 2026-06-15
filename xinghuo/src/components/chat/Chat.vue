@@ -3,7 +3,7 @@ import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { chatApi, userApi, notificationApi } from '../../services/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { DEFAULT_AVATAR, normalizeAvatar } from '../../utils/avatar'
+import { DEFAULT_AVATAR, normalizeAvatar, avatarDisplayUrl } from '../../utils/avatar'
 
 const route = useRoute()
 const router = useRouter()
@@ -928,7 +928,7 @@ watch(
         <!-- 左侧边栏 -->
         <div class="sidebar">
           <div class="user-card">
-            <el-avatar :src="currentUser.avatar" :size="80" class="user-avatar" />
+            <el-avatar :src="avatarDisplayUrl(currentUser.avatar)" :size="80" class="user-avatar" />
             <h3>{{ currentUser.name }}</h3>
             <el-button type="primary" class="post-button" @click="openPostModal">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -997,7 +997,7 @@ watch(
                 <div class="post-header">
                   <div class="post-user">
                     <el-avatar
-                      :src="normalizeAvatar(post.avatar || post.user?.avatar)"
+                      :src="avatarDisplayUrl(post.avatar || post.user?.avatar)"
                       :size="48"
                       class="user-avatar post-user-avatar-click"
                       @click="viewUserProfile(post.userId || post.user?.id)"
@@ -1096,7 +1096,7 @@ watch(
                         <template v-if="comment.user?.id == currentUser.id || comment.user?.name === currentUser.name">
                           <div class="comment-avatar-container">
                             <el-avatar
-                              :src="normalizeAvatar(comment.user?.avatar)"
+                              :src="avatarDisplayUrl(comment.user?.avatar)"
                               :size="32"
                               class="comment-avatar"
                             />
@@ -1122,7 +1122,7 @@ watch(
                         <template v-else>
                           <div class="comment-avatar-container">
                             <el-avatar
-                              :src="normalizeAvatar(comment.user?.avatar)"
+                              :src="avatarDisplayUrl(comment.user?.avatar)"
                               :size="32"
                               class="comment-avatar"
                             />
@@ -1155,7 +1155,7 @@ watch(
                   
                   <!-- 评论输入 -->
                   <div class="comment-input">
-                    <el-avatar :src="currentUser.avatar" :size="32" class="comment-input-avatar" />
+                    <el-avatar :src="avatarDisplayUrl(currentUser.avatar)" :size="32" class="comment-input-avatar" />
                     <el-input
                       v-model="commentInputs[post.id]"
                       placeholder="说点什么..."
@@ -1209,7 +1209,7 @@ watch(
     >
       <div class="post-form">
         <div class="post-user-info">
-          <el-avatar :src="currentUser.avatar" :size="40" class="user-avatar" />
+          <el-avatar :src="avatarDisplayUrl(currentUser.avatar)" :size="40" class="user-avatar" />
           <span class="user-name">{{ currentUser.name }}</span>
         </div>
         <el-input
@@ -1281,7 +1281,7 @@ watch(
     >
       <div class="post-form">
         <div class="post-user-info">
-          <el-avatar :src="currentUser.avatar" :size="40" class="user-avatar" />
+          <el-avatar :src="avatarDisplayUrl(currentUser.avatar)" :size="40" class="user-avatar" />
           <span class="user-name">{{ currentUser.name }}</span>
         </div>
         <el-input

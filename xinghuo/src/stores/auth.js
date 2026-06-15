@@ -50,6 +50,14 @@ export const useAuthStore = defineStore('auth', {
       localStorage.removeItem(LS_TOKEN)
     },
 
+    /** 头像上传等场景：同步 Pinia 与 localStorage 中的头像字段 */
+    syncAvatarFromServer (avatar) {
+      if (!this.userData) return
+      const next = normalizeAvatar(avatar)
+      this.userData = { ...this.userData, avatar: next }
+      localStorage.setItem(LS_USER, JSON.stringify(this.userData))
+    },
+
     login (payload) {
       const { token, ...user } = payload
       if (!token) return

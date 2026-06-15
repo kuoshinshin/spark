@@ -1,3 +1,5 @@
+const path = require('path');
+const fs = require('fs');
 const express = require('express');
 const cors = require('cors');
 const compression = require('compression');
@@ -52,6 +54,17 @@ app.use(compression({
     return compression.filter(req, res);
   }
 }));
+
+const uploadsRoot = path.join(__dirname, 'uploads');
+fs.mkdirSync(path.join(uploadsRoot, 'avatars'), { recursive: true });
+app.use(
+  '/uploads',
+  express.static(uploadsRoot, {
+    maxAge: isProd ? 7 * 24 * 60 * 60 * 1000 : 0,
+    fallthrough: false,
+  })
+);
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -148,6 +161,22 @@ async function startServer() {
     await ensureColumn('users', 'pubg_power_cached_json', 'ALTER TABLE users ADD COLUMN pubg_power_cached_json LONGTEXT NULL AFTER pubg_bound_at');
     await ensureColumn('users', 'pubg_power_cached_at', 'ALTER TABLE users ADD COLUMN pubg_power_cached_at DATETIME NULL AFTER pubg_power_cached_json');
 
+    try {
+      const [cols] = await connection.execute(
+        `SELECT CHARACTER_MAXIMUM_LENGTH AS maxlen, DATA_TYPE AS dt
+         FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'avatar'`
+      );
+      const row = cols[0];
+      const maxlen = row?.maxlen != null ? Number(row.maxlen) : null;
+      if (row && String(row.dt || '').toLowerCase() === 'varchar' && maxlen != null && maxlen < 2048) {
+        await connection.execute('ALTER TABLE users MODIFY COLUMN avatar VARCHAR(2048) NULL');
+        console.log('[db] users.avatar 已扩展为 VARCHAR(2048)');
+      }
+    } catch (e) {
+      console.warn('[warn] 检查/扩展 users.avatar 列失败:', e?.message || e);
+    }
+
     // 社区帖子：评论/点赞（老库常见缺失这些表，会导致聊天列表/通知创建失败）
     await connection.execute(`
       CREATE TABLE IF NOT EXISTS post_comments (
@@ -231,6 +260,17 @@ async function startServer() {
         UNIQUE KEY unique_team_player (team_id, player_index)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
+
+    await ensureColumn(
+      'teams',
+      'status',
+      "ALTER TABLE teams ADD COLUMN status ENUM('locked', 'unlocked', 'completed') DEFAULT 'locked' AFTER locked"
+    );
+    await ensureIndex(
+      'teams',
+      'idx_teams_status',
+      'CREATE INDEX idx_teams_status ON teams(status)'
+    );
 
     await connection.execute(`
       CREATE TABLE IF NOT EXISTS pubg_api_cache (

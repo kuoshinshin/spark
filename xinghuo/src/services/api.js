@@ -527,11 +527,37 @@ export const userApi = {
   
   // 更新用户资料（Profile.vue 使用）
   updateProfile: async (userData) => {
-    // 实际 API 调用
-    return request('/user/info', {
+    const data = await request('/user/info', {
       method: 'PUT',
       body: JSON.stringify(userData),
     });
+    invalidateCacheByEndpoints(['/user/info']);
+    return data;
+  },
+
+  /** multipart 上传头像，成功后写入数据库并返回 user */
+  uploadAvatar: async (file) => {
+    const base = resolveApiBaseUrl();
+    const token = typeof localStorage !== 'undefined' ? (localStorage.getItem('token') || '') : '';
+    const form = new FormData();
+    form.append('avatar', file);
+    const res = await fetch(`${base}/user/avatar`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form
+    });
+    const data = res.headers.get('content-type')?.includes('application/json')
+      ? await res.json()
+      : null;
+    if (!res.ok) {
+      const msg = (data && data.error) || '上传头像失败';
+      if (res.status === 401 || res.status === 403) {
+        triggerUnauthorized();
+      }
+      throw new Error(msg);
+    }
+    invalidateCacheByEndpoints(['/user/info']);
+    return data;
   },
   
   // 更新用户深色模式设置

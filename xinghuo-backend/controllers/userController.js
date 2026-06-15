@@ -1,3 +1,5 @@
+const path = require('path');
+const fs = require('fs').promises;
 const UserModel = require('../models/userModel');
 const ChatModel = require('../models/chatModel');
 const { getPlayerByName, getLifetimeStats, getRecentMatches, getMatchesBySeason, getCompetitivePowerScore, getMatchById, getSeasons, parsePlayerStatsFromMatch, parseMatchDetailWithTeam } = require('../services/pubgApi');
@@ -47,6 +49,17 @@ const pickUpdatableFields = (data = {}) => {
     if (Object.prototype.hasOwnProperty.call(data, key)) out[key] = data[key];
   });
   return out;
+};
+
+/** @returns {string|null} 错误文案；无 avatar 字段或合法时返回 null */
+const validateAvatarForUpdate = (data) => {
+  if (!data || typeof data.avatar !== 'string') return null;
+  const a = data.avatar.trim();
+  data.avatar = a;
+  if (!a) return null;
+  if (a.startsWith('data:')) return '请勿直接提交 base64 头像，请使用「上传头像」接口';
+  if (a.length > 2048) return '头像地址过长';
+  return null;
 };
 
 class UserController {
@@ -222,7 +235,11 @@ class UserController {
     try {
       const userId = req.user.id;
       const data = pickUpdatableFields(req.body);
-      
+      const avatarErr = validateAvatarForUpdate(data);
+      if (avatarErr) {
+        return res.status(400).json({ error: avatarErr });
+      }
+
       const result = await UserModel.update(userId, data);
       
       if (result.affectedRows === 0) {
@@ -237,6 +254,45 @@ class UserController {
     } catch (error) {
       console.error('更新用户信息失败:', error);
       res.status(500).json({ error: '更新用户信息失败，请联系管理员' });
+    }
+  }
+
+  static async uploadAvatar(req, res) {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: '请选择要上传的图片' });
+      }
+      const userId = req.user.id;
+      const publicPath = `/uploads/avatars/${req.file.filename}`;
+      const user = await UserModel.findById(userId);
+      if (!user) {
+        try {
+          await fs.unlink(req.file.path);
+        } catch (_) {}
+        return res.status(404).json({ error: '用户不存在' });
+      }
+      const prev = typeof user.avatar === 'string' ? user.avatar.trim() : '';
+      await UserModel.update(userId, { avatar: publicPath });
+      if (prev.startsWith('/uploads/avatars/') && !prev.includes('..')) {
+        const rel = prev.replace(/^\/+/, '');
+        const oldAbs = path.join(__dirname, '..', rel);
+        if (oldAbs.startsWith(path.join(__dirname, '..', 'uploads', 'avatars'))) {
+          try {
+            await fs.unlink(oldAbs);
+          } catch (_) {}
+        }
+      }
+      const updatedUser = await UserModel.findById(userId);
+      const userInfo = toPublicUser(updatedUser);
+      res.json({ message: '头像上传成功', user: userInfo, avatar: userInfo.avatar });
+    } catch (error) {
+      console.error('上传头像失败:', error);
+      if (req.file?.path) {
+        try {
+          await fs.unlink(req.file.path);
+        } catch (_) {}
+      }
+      res.status(500).json({ error: '上传头像失败，请联系管理员' });
     }
   }
   
@@ -401,6 +457,11 @@ class UserController {
     try {
       const userId = req.params.id;
       const data = pickUpdatableFields(req.body);
+
+      const avatarErr = validateAvatarForUpdate(data);
+      if (avatarErr) {
+        return res.status(400).json({ error: avatarErr });
+      }
       
       // 验证角色值是否有效
       if (data.role) {

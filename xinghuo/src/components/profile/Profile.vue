@@ -2,7 +2,8 @@
 import { ref, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { userApi } from '../../services/api'
-import { DEFAULT_AVATAR, normalizeAvatar } from '../../utils/avatar'
+import { DEFAULT_AVATAR, normalizeAvatar, avatarDisplayUrl } from '../../utils/avatar'
+import { useAuthStore } from '../../stores/auth'
 
 // 用户数据
 const userData = ref(null)
@@ -308,6 +309,9 @@ const handleSave = async () => {
         avatar: normalizeAvatar(response.user.avatar),
         gameStats: userData.value.gameStats
       }
+      editedUserData.value = { ...userData.value }
+      const auth = useAuthStore()
+      auth.syncAvatarFromServer(userData.value.avatar)
     }
     isEditing.value = false
     ElMessage.success('个人资料更新成功！')
@@ -333,12 +337,17 @@ const handleBindPubg = async () => {
       ...userData.value.pubgBinding,
       ...response.pubgBinding
     }
-    const statsData = await userApi.getStats()
+    const statsData = await userApi.getStats().catch((err) => {
+      console.warn('绑定后拉取统计失败:', err)
+      return null
+    })
     pubgStats.value = statsData?.pubgStats || null
     animatePubgNumbers(pubgVisual.value)
-    await fetchPubgPower()
-    await fetchPubgSeasons()
-    await fetchPubgMatches()
+    await Promise.allSettled([
+      fetchPubgPower(),
+      fetchPubgSeasons(),
+      fetchPubgMatches()
+    ])
     isRebinding.value = false
     ElMessage.success('PUBG 账号绑定成功')
   } catch (error) {
@@ -510,26 +519,37 @@ const handleExpandChange = async (row, expandedRows) => {
 }
 
 const avatarUploadRef = ref(null)
+const avatarUploading = ref(false)
 
-const processAvatarFile = async (file) => {
+const uploadAvatarFile = async (file) => {
   if (!file) return
+  avatarUploading.value = true
   try {
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      userData.value.avatar = e.target.result
-      editedUserData.value.avatar = e.target.result
+    const response = await userApi.uploadAvatar(file)
+    if (response.user) {
+      const next = normalizeAvatar(response.user.avatar)
+      userData.value = {
+        ...userData.value,
+        ...response.user,
+        avatar: next,
+        gameStats: userData.value.gameStats
+      }
+      editedUserData.value = { ...userData.value }
+      const auth = useAuthStore()
+      auth.syncAvatarFromServer(next)
     }
-    reader.readAsDataURL(file)
-    ElMessage.success('头像更新成功')
+    ElMessage.success(response.message || '头像已保存')
   } catch (error) {
     console.error('上传头像失败:', error)
-    ElMessage.error('上传头像失败，请重试')
+    ElMessage.error(error.message || '上传头像失败，请重试')
+  } finally {
+    avatarUploading.value = false
   }
 }
 
 const onAvatarFileChange = (uploadFile) => {
   const raw = uploadFile?.raw
-  if (raw) processAvatarFile(raw)
+  if (raw) uploadAvatarFile(raw)
   avatarUploadRef.value?.clearFiles()
 }
 // 生命周期钩子
@@ -613,13 +633,14 @@ onMounted(async () => {
                   :auto-upload="false"
                   accept="image/*"
                   :limit="1"
+                  :disabled="avatarUploading"
                   :on-change="onAvatarFileChange"
                 >
                   <template #trigger>
                     <div class="avatar">
-                      <el-avatar :src="userData.avatar" size="large"></el-avatar>
+                      <el-avatar :src="avatarDisplayUrl(userData.avatar)" size="large"></el-avatar>
                       <div class="avatar-edit">
-                        <span>更换头像</span>
+                        <span>{{ avatarUploading ? '上传中…' : '更换头像' }}</span>
                       </div>
                     </div>
                   </template>
