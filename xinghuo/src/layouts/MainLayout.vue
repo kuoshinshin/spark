@@ -180,10 +180,12 @@ watch(
 }
 
 .logo-image {
-  width: 34px;
-  height: 34px;
-  border-radius: 6px;
-  object-fit: cover;
+  width: auto;
+  height: 40px;
+  max-width: 44px;
+  border-radius: 8px;
+  object-fit: contain;
+  object-position: center top;
 }
 
 .logo h1 {
