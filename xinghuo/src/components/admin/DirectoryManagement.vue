@@ -17,9 +17,8 @@ const role = ref(getRole())
 const isAdmin = computed(() => ['admin', 'superadmin'].includes(role.value))
 const canDeleteUser = computed(() => role.value === 'superadmin')
 
-const activeTab = ref('match')
+const activeTab = ref('carousel')
 const tabLabels = {
-  match: '比赛管理',
   carousel: '轮播管理',
   chat: '圈子管理',
   user: '个人管理',
@@ -28,7 +27,6 @@ const tabLabels = {
 const activeModuleLabel = computed(() => tabLabels[activeTab.value] || '')
 const loading = ref(false)
 
-const matches = ref([])
 const carousels = ref([])
 const chats = ref([])
 const users = ref([])
@@ -36,30 +34,6 @@ const inviteCodes = ref([])
 
 const dialogType = ref('')
 const dialogVisible = ref(false)
-const liveDialogVisible = ref(false)
-const liveMatch = ref(null)
-const liveRounds = ref([])
-const liveLeaderboard = ref([])
-const selectedRoundId = ref(null)
-const snapshotTeams = ref([])
-const roundForm = reactive({
-  roundNo: 1,
-  mapName: '',
-})
-const resultRows = ref([])
-
-const matchForm = reactive({
-  id: null,
-  title: '',
-  description: '',
-  start_time: '',
-  end_time: '',
-  registration_open_at: '',
-  registration_close_at: '',
-  roster_frozen_at: '',
-  location: '',
-  status: 'upcoming',
-})
 
 const carouselForm = reactive({
   id: null,
@@ -98,12 +72,6 @@ const pickFirstUsableInviteCode = () => {
   return list.length ? list[0].code : ''
 }
 
-const resetMatchForm = () => {
-  Object.assign(matchForm, {
-    id: null, title: '', description: '', start_time: '', end_time: '', registration_open_at: '', registration_close_at: '', roster_frozen_at: '', location: '', status: 'upcoming',
-  })
-}
-
 const resetCarouselForm = () => {
   Object.assign(carouselForm, {
     id: null, title: '', subtitle: '', content: '', type: 'text', buttons: '',
@@ -137,7 +105,6 @@ const resetInviteForm = () => {
 
 const openCreateDialog = (type) => {
   dialogType.value = type
-  if (type === 'match') resetMatchForm()
   if (type === 'carousel') resetCarouselForm()
   if (type === 'user') resetUserForm()
   if (type === 'invite') resetInviteForm()
@@ -146,17 +113,6 @@ const openCreateDialog = (type) => {
 
 const openEditDialog = (type, row) => {
   dialogType.value = type
-  if (type === 'match') {
-    Object.assign(matchForm, {
-      ...row,
-      start_time: toDatetimePickerValue(row.start_time),
-      end_time: toDatetimePickerValue(row.end_time),
-      registration_open_at: toDatetimePickerValue(row.registration_open_at),
-      registration_close_at: toDatetimePickerValue(row.registration_close_at),
-      roster_frozen_at: toDatetimePickerValue(row.roster_frozen_at),
-      status: row.status || 'upcoming',
-    })
-  }
   if (type === 'carousel') Object.assign(carouselForm, row)
   if (type === 'user') Object.assign(userForm, { ...row, password: '' })
   if (type === 'invite') {
@@ -178,37 +134,6 @@ const formatDate = (value) => {
   return d.toLocaleString('zh-CN')
 }
 
-/** 将接口返回的时间转为 el-date-picker value-format 所需字符串 */
-const toDatetimePickerValue = (val) => {
-  if (!val) return ''
-  const d = new Date(val)
-  if (Number.isNaN(d.getTime())) return typeof val === 'string' ? val.slice(0, 19) : ''
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  const h = String(d.getHours()).padStart(2, '0')
-  const min = String(d.getMinutes()).padStart(2, '0')
-  const s = String(d.getSeconds()).padStart(2, '0')
-  return `${y}-${m}-${day} ${h}:${min}:${s}`
-}
-
-const matchStatusLabel = (v) => {
-  const map = { upcoming: '未开始', ongoing: '进行中', completed: '已结束' }
-  return map[v] || v || '-'
-}
-
-const matchPhaseLabel = (v) => {
-  const map = {
-    draft: '草稿',
-    registration: '报名中',
-    frozen: '名单冻结',
-    live: '赛中',
-    completed: '已完成',
-    archived: '已归档',
-  }
-  return map[v] || v || '-'
-}
-
 const carouselTypeLabel = (v) => {
   const map = { text: '文本', promotion: '推广', event: '活动' }
   return map[v] || v || '-'
@@ -217,10 +142,6 @@ const carouselTypeLabel = (v) => {
 const userRoleLabel = (v) => {
   const map = { user: '普通用户', admin: '管理员', superadmin: '系统管理员' }
   return map[v] || v || '-'
-}
-
-const loadMatches = async () => {
-  matches.value = await adminApi.match.getAll()
 }
 
 const loadCarousels = async () => {
@@ -243,7 +164,7 @@ const loadAll = async () => {
   if (!isAdmin.value) return
   loading.value = true
   try {
-    await Promise.all([loadMatches(), loadCarousels(), loadChats(), loadUsers(), loadInviteCodes()])
+    await Promise.all([loadCarousels(), loadChats(), loadUsers(), loadInviteCodes()])
   } catch (e) {
     ElMessage.error(e?.message || '后台数据加载失败')
   } finally {
@@ -253,7 +174,6 @@ const loadAll = async () => {
 
 const loadActiveTabData = async (tab) => {
   if (!isAdmin.value) return
-  if (tab === 'match') return loadMatches()
   if (tab === 'carousel') return loadCarousels()
   if (tab === 'chat') return loadChats()
   if (tab === 'user') return loadUsers()
@@ -263,23 +183,6 @@ const loadActiveTabData = async (tab) => {
 const submitDialog = async () => {
   try {
     loading.value = true
-    if (dialogType.value === 'match') {
-      const payload = {
-        title: matchForm.title,
-        description: matchForm.description,
-        start_time: matchForm.start_time,
-        end_time: matchForm.end_time,
-        registration_open_at: matchForm.registration_open_at || null,
-        registration_close_at: matchForm.registration_close_at || null,
-        roster_frozen_at: matchForm.roster_frozen_at || null,
-        location: matchForm.location,
-        status: matchForm.status,
-      }
-      if (matchForm.id) await adminApi.match.update(matchForm.id, payload)
-      else await adminApi.match.create(payload)
-      await loadMatches()
-    }
-
     if (dialogType.value === 'carousel') {
       const payload = {
         title: carouselForm.title,
@@ -357,191 +260,6 @@ const submitDialog = async () => {
   }
 }
 
-const removeMatch = async (id) => {
-  try {
-    await adminApi.match.delete(id)
-    await loadMatches()
-    ElMessage.success('比赛已删除')
-  } catch (e) {
-    ElMessage.error(e?.message || '删除失败')
-  }
-}
-
-const setActiveRegistrationMatch = async (row) => {
-  try {
-    loading.value = true
-    await adminApi.match.setActiveRegistration(row.id)
-    await loadMatches()
-    ElMessage.success('已设为当前报名赛事')
-  } catch (e) {
-    ElMessage.error(e?.message || '设置失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-const closeRegistrationMatch = async (row) => {
-  try {
-    loading.value = true
-    await adminApi.match.closeRegistration(row.id)
-    await loadMatches()
-    ElMessage.success('报名已关闭')
-  } catch (e) {
-    ElMessage.error(e?.message || '关闭失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-const freezeMatchRoster = async (row) => {
-  try {
-    loading.value = true
-    await adminApi.match.freezeRoster(row.id)
-    await loadMatches()
-    ElMessage.success('名单已冻结')
-  } catch (e) {
-    ElMessage.error(e?.message || '冻结失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-const startMatch = async (row) => {
-  try {
-    loading.value = true
-    await adminApi.match.start(row.id)
-    await loadMatches()
-    ElMessage.success('比赛已开赛')
-  } catch (e) {
-    ElMessage.error(e?.message || '开赛失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-const completeMatch = async (row) => {
-  try {
-    loading.value = true
-    await adminApi.match.complete(row.id)
-    await loadMatches()
-    ElMessage.success('比赛已完成')
-  } catch (e) {
-    ElMessage.error(e?.message || '完成比赛失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-const loadLiveData = async () => {
-  if (!liveMatch.value?.id) return
-  const [roundResp, boardResp] = await Promise.all([
-    adminApi.match.getRounds(liveMatch.value.id),
-    adminApi.match.getLeaderboard(liveMatch.value.id),
-  ])
-  liveRounds.value = roundResp?.rounds || []
-  liveLeaderboard.value = boardResp?.teams || []
-  if (!snapshotTeams.value.length) {
-    // 积分榜为空时仍需要录入队伍；从当前报名大厅结构中取冻结后的队伍列表兜底。
-    snapshotTeams.value = (matches.value || []).length ? [] : []
-  }
-  if (!selectedRoundId.value && liveRounds.value.length) {
-    selectedRoundId.value = liveRounds.value[0].id
-  }
-}
-
-const openLiveDialog = async (row) => {
-  liveMatch.value = row
-  liveDialogVisible.value = true
-  selectedRoundId.value = null
-  resultRows.value = []
-  snapshotTeams.value = []
-  roundForm.roundNo = 1
-  roundForm.mapName = ''
-  try {
-    loading.value = true
-    await loadLiveData()
-  } catch (e) {
-    ElMessage.error(e?.message || '加载赛中数据失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-const createRound = async () => {
-  if (!liveMatch.value?.id) return
-  try {
-    loading.value = true
-    await adminApi.match.createRound(liveMatch.value.id, {
-      roundNo: roundForm.roundNo,
-      mapName: roundForm.mapName,
-    })
-    await loadLiveData()
-    ElMessage.success('局次已创建')
-  } catch (e) {
-    ElMessage.error(e?.message || '创建局次失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-const startSelectedRound = async () => {
-  if (!liveMatch.value?.id || !selectedRoundId.value) return
-  try {
-    loading.value = true
-    await adminApi.match.startRound(liveMatch.value.id, selectedRoundId.value)
-    await loadLiveData()
-    ElMessage.success('局次已开始')
-  } catch (e) {
-    ElMessage.error(e?.message || '开始局次失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-const initResultRows = () => {
-  const teams = liveLeaderboard.value.length ? liveLeaderboard.value : snapshotTeams.value
-  resultRows.value = teams.map((team, idx) => ({
-    matchTeamId: team.matchTeamId,
-    teamName: team.teamName,
-    placement: idx + 1,
-    kills: 0,
-    penaltyPoints: 0,
-    remark: '',
-  }))
-}
-
-const saveRoundResults = async () => {
-  if (!liveMatch.value?.id || !selectedRoundId.value) return
-  if (!resultRows.value.length) {
-    ElMessage.warning('请先初始化成绩行')
-    return
-  }
-  try {
-    loading.value = true
-    await adminApi.match.saveRoundResults(liveMatch.value.id, selectedRoundId.value, resultRows.value)
-    await loadLiveData()
-    ElMessage.success('成绩已保存')
-  } catch (e) {
-    ElMessage.error(e?.message || '保存成绩失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-const completeSelectedRound = async () => {
-  if (!liveMatch.value?.id || !selectedRoundId.value) return
-  try {
-    loading.value = true
-    await adminApi.match.completeRound(liveMatch.value.id, selectedRoundId.value)
-    await loadLiveData()
-    ElMessage.success('局次已锁定')
-  } catch (e) {
-    ElMessage.error(e?.message || '锁定局次失败')
-  } finally {
-    loading.value = false
-  }
-}
-
 const removeCarousel = async (id) => {
   try {
     await adminApi.carousel.delete(id)
@@ -610,12 +328,11 @@ watch(activeTab, async (tab) => {
       <template v-else>
         <header class="admin-page-header">
           <h1 class="admin-page-title">后台管理</h1>
-          <p class="admin-page-desc">与全站风格一致的管理中心，维护比赛、轮播、圈子、用户与邀请码。</p>
+          <p class="admin-page-desc">与全站风格一致的管理中心，维护轮播、圈子、用户与邀请码。</p>
         </header>
 
         <div class="admin-panel">
           <el-tabs v-model="activeTab" class="admin-tabs">
-            <el-tab-pane label="比赛管理" name="match" />
             <el-tab-pane label="轮播管理" name="carousel" />
             <el-tab-pane label="圈子管理" name="chat" />
             <el-tab-pane label="个人管理" name="user" />
@@ -626,7 +343,7 @@ watch(activeTab, async (tab) => {
             <div class="toolbar">
               <span class="toolbar-label">{{ activeModuleLabel }}</span>
               <el-button
-                v-if="activeTab === 'match' || activeTab === 'carousel' || activeTab === 'user' || activeTab === 'invite'"
+                v-if="activeTab === 'carousel' || activeTab === 'user' || activeTab === 'invite'"
                 type="primary"
                 @click="openCreateDialog(activeTab)"
               >
@@ -634,102 +351,6 @@ watch(activeTab, async (tab) => {
                 新增
               </el-button>
             </div>
-
-            <el-table v-if="activeTab === 'match'" :data="matches" border class="admin-table">
-          <el-table-column prop="id" label="ID" width="80" />
-          <el-table-column prop="title" label="标题" />
-          <el-table-column prop="location" label="地点" />
-          <el-table-column prop="status" label="状态" width="120">
-            <template #default="scope">{{ matchStatusLabel(scope.row.status) }}</template>
-          </el-table-column>
-          <el-table-column prop="phase" label="阶段" width="120">
-            <template #default="scope">{{ matchPhaseLabel(scope.row.phase) }}</template>
-          </el-table-column>
-          <el-table-column label="当前报名" width="110">
-            <template #default="scope">
-              <el-tag :type="Number(scope.row.is_active_registration) === 1 ? 'success' : 'info'">
-                {{ Number(scope.row.is_active_registration) === 1 ? '当前' : '否' }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="开始时间" width="180">
-            <template #default="scope">{{ formatDate(scope.row.start_time) }}</template>
-          </el-table-column>
-          <el-table-column label="结束时间" width="180">
-            <template #default="scope">{{ formatDate(scope.row.end_time) }}</template>
-          </el-table-column>
-          <el-table-column label="报名开始" width="180">
-            <template #default="scope">{{ formatDate(scope.row.registration_open_at) || '-' }}</template>
-          </el-table-column>
-          <el-table-column label="报名截止" width="180">
-            <template #default="scope">{{ formatDate(scope.row.registration_close_at) || '-' }}</template>
-          </el-table-column>
-          <el-table-column label="名单冻结" width="180">
-            <template #default="scope">{{ formatDate(scope.row.roster_frozen_at) || '-' }}</template>
-          </el-table-column>
-          <el-table-column label="操作" width="560" fixed="right" class-name="operation-column">
-            <template #default="scope">
-              <div class="table-actions">
-                <el-button type="primary" size="small" @click="openEditDialog('match', scope.row)"><el-icon><Edit /></el-icon></el-button>
-                <el-button
-                  size="small"
-                  type="success"
-                  plain
-                  :disabled="Number(scope.row.is_active_registration) === 1"
-                  @click="setActiveRegistrationMatch(scope.row)"
-                >
-                  设为当前
-                </el-button>
-                <el-button
-                  size="small"
-                  type="warning"
-                  plain
-                  :disabled="Number(scope.row.is_active_registration) !== 1"
-                  @click="closeRegistrationMatch(scope.row)"
-                >
-                  关闭报名
-                </el-button>
-                <el-button
-                  size="small"
-                  type="info"
-                  plain
-                  :disabled="Boolean(scope.row.roster_frozen_at)"
-                  @click="freezeMatchRoster(scope.row)"
-                >
-                  冻结名单
-                </el-button>
-                <el-button
-                  size="small"
-                  type="primary"
-                  plain
-                  :disabled="scope.row.phase !== 'frozen'"
-                  @click="startMatch(scope.row)"
-                >
-                  开赛
-                </el-button>
-                <el-button
-                  size="small"
-                  type="primary"
-                  plain
-                  :disabled="!['live', 'completed'].includes(scope.row.phase)"
-                  @click="openLiveDialog(scope.row)"
-                >
-                  赛中管理
-                </el-button>
-                <el-button
-                  size="small"
-                  type="success"
-                  plain
-                  :disabled="scope.row.phase !== 'live'"
-                  @click="completeMatch(scope.row)"
-                >
-                  完成比赛
-                </el-button>
-                <el-button type="danger" size="small" @click="removeMatch(scope.row.id)"><el-icon><Delete /></el-icon></el-button>
-              </div>
-            </template>
-          </el-table-column>
-        </el-table>
 
             <el-table v-if="activeTab === 'carousel'" :data="carousels" border class="admin-table">
           <el-table-column prop="id" label="ID" width="80" />
@@ -810,62 +431,11 @@ watch(activeTab, async (tab) => {
         <el-dialog
           v-model="dialogVisible"
           class="admin-dialog"
-          :title="dialogType === 'match' ? '比赛' : dialogType === 'carousel' ? '轮播' : dialogType === 'invite' ? '邀请码' : '用户'"
+          :title="dialogType === 'carousel' ? '轮播' : dialogType === 'invite' ? '邀请码' : '用户'"
           width="560px"
           align-center
         >
-        <div v-if="dialogType === 'match'" class="form-grid">
-          <el-input v-model="matchForm.title" placeholder="标题" />
-          <el-input v-model="matchForm.location" placeholder="地点" />
-          <el-select v-model="matchForm.status" placeholder="比赛状态" style="width: 100%">
-            <el-option label="未开始" value="upcoming" />
-            <el-option label="进行中" value="ongoing" />
-            <el-option label="已结束" value="completed" />
-          </el-select>
-          <el-date-picker
-            v-model="matchForm.start_time"
-            type="datetime"
-            placeholder="开始时间"
-            value-format="YYYY-MM-DD HH:mm:ss"
-            format="YYYY-MM-DD HH:mm"
-            style="width: 100%"
-          />
-          <el-date-picker
-            v-model="matchForm.end_time"
-            type="datetime"
-            placeholder="结束时间"
-            value-format="YYYY-MM-DD HH:mm:ss"
-            format="YYYY-MM-DD HH:mm"
-            style="width: 100%"
-          />
-          <el-date-picker
-            v-model="matchForm.registration_open_at"
-            type="datetime"
-            placeholder="报名开始时间（可选）"
-            value-format="YYYY-MM-DD HH:mm:ss"
-            format="YYYY-MM-DD HH:mm"
-            style="width: 100%"
-          />
-          <el-date-picker
-            v-model="matchForm.registration_close_at"
-            type="datetime"
-            placeholder="报名截止时间（可选）"
-            value-format="YYYY-MM-DD HH:mm:ss"
-            format="YYYY-MM-DD HH:mm"
-            style="width: 100%"
-          />
-          <el-date-picker
-            v-model="matchForm.roster_frozen_at"
-            type="datetime"
-            placeholder="名单冻结时间（可选）"
-            value-format="YYYY-MM-DD HH:mm:ss"
-            format="YYYY-MM-DD HH:mm"
-            style="width: 100%"
-          />
-          <el-input v-model="matchForm.description" type="textarea" :rows="4" placeholder="描述" />
-        </div>
-
-        <div v-else-if="dialogType === 'carousel'" class="form-grid">
+        <div v-if="dialogType === 'carousel'" class="form-grid">
           <el-input v-model="carouselForm.title" placeholder="标题" />
           <el-input v-model="carouselForm.subtitle" placeholder="副标题" />
           <el-select v-model="carouselForm.type" placeholder="轮播类型" style="width: 100%">
@@ -918,92 +488,6 @@ watch(activeTab, async (tab) => {
           <el-button @click="dialogVisible = false">取消</el-button>
           <el-button type="primary" @click="submitDialog">保存</el-button>
         </template>
-        </el-dialog>
-
-        <el-dialog
-          v-model="liveDialogVisible"
-          class="admin-dialog"
-          :title="`赛中管理 - ${liveMatch?.title || ''}`"
-          width="980px"
-          align-center
-        >
-          <div class="live-panel">
-            <div class="live-section">
-              <h3>局次管理</h3>
-              <div class="round-create-row">
-                <el-input-number v-model="roundForm.roundNo" :min="1" placeholder="局次" />
-                <el-input v-model="roundForm.mapName" placeholder="地图名称（如 Erangel）" />
-                <el-button type="primary" @click="createRound">创建局次</el-button>
-              </div>
-              <el-table :data="liveRounds" border size="small">
-                <el-table-column prop="round_no" label="局次" width="80" />
-                <el-table-column prop="map_name" label="地图" />
-                <el-table-column prop="status" label="状态" width="100" />
-                <el-table-column label="操作" width="220">
-                  <template #default="scope">
-                    <el-button size="small" @click="selectedRoundId = scope.row.id">选择</el-button>
-                    <el-button size="small" type="primary" plain :disabled="scope.row.status !== 'pending'" @click="startSelectedRound">开始</el-button>
-                    <el-button size="small" type="success" plain :disabled="scope.row.status === 'completed'" @click="completeSelectedRound">锁定</el-button>
-                  </template>
-                </el-table-column>
-              </el-table>
-            </div>
-
-            <div class="live-section">
-              <h3>成绩录入</h3>
-              <div class="round-create-row">
-                <el-select v-model="selectedRoundId" placeholder="选择局次" style="width: 180px">
-                  <el-option
-                    v-for="round in liveRounds"
-                    :key="round.id"
-                    :label="`第 ${round.round_no} 局 - ${round.status}`"
-                    :value="round.id"
-                  />
-                </el-select>
-                <el-button @click="initResultRows">初始化成绩行</el-button>
-                <el-button type="primary" @click="saveRoundResults">保存成绩</el-button>
-              </div>
-              <el-table :data="resultRows" border size="small">
-                <el-table-column prop="teamName" label="队伍" min-width="160" />
-                <el-table-column label="排名" width="120">
-                  <template #default="scope">
-                    <el-input-number v-model="scope.row.placement" :min="1" :max="16" size="small" />
-                  </template>
-                </el-table-column>
-                <el-table-column label="淘汰" width="120">
-                  <template #default="scope">
-                    <el-input-number v-model="scope.row.kills" :min="0" size="small" />
-                  </template>
-                </el-table-column>
-                <el-table-column label="扣分" width="120">
-                  <template #default="scope">
-                    <el-input-number v-model="scope.row.penaltyPoints" :min="0" size="small" />
-                  </template>
-                </el-table-column>
-                <el-table-column label="备注" min-width="160">
-                  <template #default="scope">
-                    <el-input v-model="scope.row.remark" size="small" />
-                  </template>
-                </el-table-column>
-              </el-table>
-            </div>
-
-            <div class="live-section">
-              <h3>积分榜</h3>
-              <el-table :data="liveLeaderboard" border size="small">
-                <el-table-column prop="rank" label="排名" width="80" />
-                <el-table-column prop="teamName" label="队伍" />
-                <el-table-column prop="totalPoints" label="总分" width="90" />
-                <el-table-column prop="kills" label="总淘汰" width="90" />
-                <el-table-column prop="placementPoints" label="排名分" width="90" />
-                <el-table-column prop="killPoints" label="淘汰分" width="90" />
-                <el-table-column prop="penaltyPoints" label="扣分" width="80" />
-              </el-table>
-            </div>
-          </div>
-          <template #footer>
-            <el-button @click="liveDialogVisible = false">关闭</el-button>
-          </template>
         </el-dialog>
       </template>
     </div>

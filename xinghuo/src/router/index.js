@@ -35,7 +35,7 @@ const router = createRouter({
         {
           path: 'match',
           name: 'match',
-          component: () => import('../components/match/Match.vue')
+          component: () => import('../components/match/MatchPlaceholder.vue')
         },
         {
           path: 'profile',

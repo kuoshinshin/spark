@@ -9,14 +9,12 @@
     "init-db": "node config/init-db.js",
     "migrate-invite-codes": "node scripts/add_invite_codes_table.js",
     "seed:test-users": "node scripts/seed_test_users.js",
-    "seed:match-flow": "node scripts/seed_match_flow.js",
     "invite:apply-env": "node scripts/apply_env_invite_code.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
     "pubg",
     "chat",
-    "match",
     "event"
   ],
   "author": "",

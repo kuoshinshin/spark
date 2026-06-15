@@ -167,61 +167,18 @@ class UserModel {
     return result;
   }
 
-  // 获取用户比赛数据
-  static async getUserMatches(userId) {
-    const emptyStats = {
-      totalMatches: 0,
-      totalWins: 0,
-      totalKills: 0,
-      kdRatio: 0,
-      bestRank: 0,
+  // 获取用户比赛数据（站内赛事模块重建前返回空统计）
+  static async getUserMatches(_userId) {
+    return {
+      stats: {
+        totalMatches: 0,
+        totalWins: 0,
+        totalKills: 0,
+        kdRatio: 0,
+        bestRank: 0,
+      },
+      history: [],
     };
-
-    const countCompletedTeams = async () => {
-      const [rows] = await pool.execute(
-        `
-        SELECT t.id
-        FROM team_players tp
-        JOIN teams t ON tp.team_id = t.id
-        WHERE tp.user_id = ? AND t.status = 'completed'
-        `,
-        [String(userId)]
-      );
-      return rows.length;
-    };
-
-    const countAllTeams = async () => {
-      const [rows] = await pool.execute(
-        `
-        SELECT t.id
-        FROM team_players tp
-        JOIN teams t ON tp.team_id = t.id
-        WHERE tp.user_id = ?
-        `,
-        [String(userId)]
-      );
-      return rows.length;
-    };
-
-    try {
-      const totalMatches = await countCompletedTeams();
-      return { stats: { ...emptyStats, totalMatches }, history: [] };
-    } catch (error) {
-      const msg = String(error?.message || '');
-      if (error?.code === 'ER_BAD_FIELD_ERROR' && msg.includes('status')) {
-        try {
-          const totalMatches = await countAllTeams();
-          return { stats: { ...emptyStats, totalMatches }, history: [] };
-        } catch (fallbackErr) {
-          console.warn('getUserMatches 降级统计失败:', fallbackErr?.message || fallbackErr);
-          return { stats: emptyStats, history: [] };
-        }
-      }
-      if (error?.code === 'ER_NO_SUCH_TABLE') {
-        return { stats: emptyStats, history: [] };
-      }
-      throw error;
-    }
   }
 }
 

@@ -298,104 +298,6 @@ async function startServer() {
         AND pubg_player_id IS NOT NULL
         AND pubg_power_cached_json IS NOT NULL
     `);
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS match_registrations (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        match_id INT NOT NULL,
-        user_id INT NOT NULL,
-        team_name VARCHAR(100) NOT NULL,
-        player_name VARCHAR(64) NOT NULL,
-        game_id VARCHAR(64) NOT NULL,
-        phone VARCHAR(30) NOT NULL,
-        address VARCHAR(255) NOT NULL,
-        status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
-        review_note VARCHAR(255) DEFAULT '',
-        reviewed_by INT NULL,
-        reviewed_at DATETIME NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        UNIQUE KEY uniq_match_user (match_id, user_id),
-        KEY idx_match_status (match_id, status),
-        CONSTRAINT fk_match_reg_match_id FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE,
-        CONSTRAINT fk_match_reg_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-      )
-    `);
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS match_teams (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        match_id INT NOT NULL,
-        team_number INT NOT NULL,
-        team_name VARCHAR(255) NOT NULL,
-        captain_user_id VARCHAR(255) NULL,
-        locked BOOLEAN DEFAULT TRUE,
-        status ENUM('locked', 'unlocked', 'completed') DEFAULT 'locked',
-        updated_by VARCHAR(255) NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        UNIQUE KEY uniq_match_team_number (match_id, team_number),
-        KEY idx_match_teams_match_id (match_id),
-        CONSTRAINT fk_match_teams_match_id FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE
-      )
-    `);
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS match_team_players (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        match_id INT NOT NULL,
-        match_team_id INT NOT NULL,
-        player_index INT NOT NULL,
-        user_id VARCHAR(255) NULL,
-        name VARCHAR(255) NULL,
-        game_id VARCHAR(255) NULL,
-        company VARCHAR(255) NULL,
-        is_current_user BOOLEAN DEFAULT FALSE,
-        player_card_uuid VARCHAR(36) NULL,
-        joined_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        UNIQUE KEY uniq_match_team_player (match_team_id, player_index),
-        KEY idx_match_team_players_match_id (match_id),
-        KEY idx_match_team_players_team_id (match_team_id),
-        CONSTRAINT fk_match_team_players_match_id FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE,
-        CONSTRAINT fk_match_team_players_team_id FOREIGN KEY (match_team_id) REFERENCES match_teams(id) ON DELETE CASCADE
-      )
-    `);
-    if (await tableExists('match_team_players')) {
-      await connection.execute("UPDATE match_team_players SET user_id = NULL WHERE user_id IS NOT NULL AND TRIM(user_id) = ''");
-      await connection.execute(`
-        UPDATE match_team_players mtp
-        JOIN (
-          SELECT match_id, user_id, MIN(id) AS keep_id
-          FROM match_team_players
-          WHERE user_id IS NOT NULL AND TRIM(user_id) <> ''
-          GROUP BY match_id, user_id
-          HAVING COUNT(*) > 1
-        ) dup ON dup.match_id = mtp.match_id AND dup.user_id = mtp.user_id AND mtp.id <> dup.keep_id
-        SET mtp.user_id = NULL,
-            mtp.name = NULL,
-            mtp.game_id = NULL,
-            mtp.company = NULL,
-            mtp.is_current_user = false,
-            mtp.player_card_uuid = NULL
-      `);
-      await ensureIndex(
-        'match_team_players',
-        'uniq_match_team_players_match_user',
-        'ALTER TABLE match_team_players ADD UNIQUE KEY uniq_match_team_players_match_user (match_id, user_id(191))'
-      );
-    }
-    await ensureColumn('matches', 'registration_open_at', 'ALTER TABLE matches ADD COLUMN registration_open_at DATETIME NULL AFTER end_time');
-    await ensureColumn('matches', 'registration_close_at', 'ALTER TABLE matches ADD COLUMN registration_close_at DATETIME NULL AFTER registration_open_at');
-    await ensureColumn('matches', 'roster_frozen_at', 'ALTER TABLE matches ADD COLUMN roster_frozen_at DATETIME NULL AFTER registration_close_at');
-    await ensureColumn('matches', 'phase', "ALTER TABLE matches ADD COLUMN phase ENUM('draft', 'registration', 'frozen', 'live', 'completed', 'archived') NOT NULL DEFAULT 'draft' AFTER status");
-    await ensureColumn('matches', 'is_active_registration', 'ALTER TABLE matches ADD COLUMN is_active_registration TINYINT(1) NOT NULL DEFAULT 0 AFTER roster_frozen_at');
-    await ensureColumn('matches', 'started_at', 'ALTER TABLE matches ADD COLUMN started_at DATETIME NULL AFTER is_active_registration');
-    await ensureColumn('matches', 'completed_at', 'ALTER TABLE matches ADD COLUMN completed_at DATETIME NULL AFTER started_at');
-    await ensureColumn('matches', 'archived_at', 'ALTER TABLE matches ADD COLUMN archived_at DATETIME NULL AFTER completed_at');
-    await ensureIndex(
-      'matches',
-      'idx_matches_active_registration',
-      'CREATE INDEX idx_matches_active_registration ON matches (is_active_registration, status, start_time)'
-    );
     if (await tableExists('team_players')) {
       await ensureColumn(
         'team_players',
@@ -430,89 +332,6 @@ async function startServer() {
         'ALTER TABLE team_players ADD UNIQUE KEY uniq_team_players_user_id (user_id(191))'
       );
     }
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS match_roster_snapshots (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        match_id INT NOT NULL,
-        match_team_id INT NOT NULL,
-        team_number INT NOT NULL,
-        team_name VARCHAR(255) NOT NULL,
-        player_index INT NOT NULL,
-        user_id VARCHAR(255) NULL,
-        player_name VARCHAR(255) NULL,
-        game_id VARCHAR(255) NULL,
-        platform VARCHAR(255) NULL,
-        real_name VARCHAR(100) NULL,
-        phone VARCHAR(30) NULL,
-        address VARCHAR(255) NULL,
-        power_score INT NULL,
-        snapshotted_at DATETIME NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE KEY uniq_snapshot_match_team_slot (match_id, match_team_id, player_index),
-        KEY idx_snapshot_match_id (match_id),
-        CONSTRAINT fk_snapshot_match_id FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE,
-        CONSTRAINT fk_snapshot_team_id FOREIGN KEY (match_team_id) REFERENCES match_teams(id) ON DELETE CASCADE
-      )
-    `);
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS match_operation_logs (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        match_id INT NULL,
-        match_team_id INT NULL,
-        operator_user_id INT NULL,
-        action VARCHAR(80) NOT NULL,
-        payload_json LONGTEXT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        KEY idx_match_operation_match_id (match_id),
-        KEY idx_match_operation_team_id (match_team_id),
-        KEY idx_match_operation_operator (operator_user_id)
-      )
-    `);
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS match_rounds (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        match_id INT NOT NULL,
-        round_no INT NOT NULL,
-        map_name VARCHAR(80) NULL,
-        status ENUM('pending', 'live', 'completed', 'voided') NOT NULL DEFAULT 'pending',
-        started_at DATETIME NULL,
-        ended_at DATETIME NULL,
-        created_by INT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        UNIQUE KEY uniq_match_round_no (match_id, round_no),
-        KEY idx_match_rounds_match_id (match_id),
-        CONSTRAINT fk_match_rounds_match_id FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE
-      )
-    `);
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS match_round_results (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        match_id INT NOT NULL,
-        round_id INT NOT NULL,
-        match_team_id INT NOT NULL,
-        team_number INT NOT NULL,
-        team_name VARCHAR(255) NOT NULL,
-        placement INT NOT NULL,
-        kills INT NOT NULL DEFAULT 0,
-        placement_points INT NOT NULL DEFAULT 0,
-        kill_points INT NOT NULL DEFAULT 0,
-        total_points INT NOT NULL DEFAULT 0,
-        penalty_points INT NOT NULL DEFAULT 0,
-        remark VARCHAR(255) NULL,
-        is_locked TINYINT(1) NOT NULL DEFAULT 0,
-        created_by INT NULL,
-        updated_by INT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        UNIQUE KEY uniq_round_team_result (round_id, match_team_id),
-        KEY idx_round_results_match_id (match_id),
-        KEY idx_round_results_round_id (round_id),
-        CONSTRAINT fk_round_results_match_id FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE,
-        CONSTRAINT fk_round_results_round_id FOREIGN KEY (round_id) REFERENCES match_rounds(id) ON DELETE CASCADE,
-        CONSTRAINT fk_round_results_team_id FOREIGN KEY (match_team_id) REFERENCES match_teams(id) ON DELETE CASCADE
-      )
-    `);
     const ensureInviteCodes = require('./config/ensureInviteCodes');
     await ensureInviteCodes(connection);
     connection.release();
@@ -525,7 +344,6 @@ async function startServer() {
   const authRoutes = require('./routes/auth');
   const userRoutes = require('./routes/user');
   const chatRoutes = require('./routes/chat');
-  const matchRoutes = require('./routes/match');
   const carouselRoutes = require('./routes/carousel');
   const shareRoutes = require('./routes/share');
   const inviteCodeRoutes = require('./routes/inviteCodes');
@@ -535,7 +353,6 @@ async function startServer() {
   app.use('/api/invite-codes', inviteCodeRoutes);
   app.use('/api/user', userRoutes);
   app.use('/api/chat', chatRoutes);
-  app.use('/api/match', matchRoutes);
   app.use('/api/carousel', carouselRoutes);
   app.use('/api/share', shareRoutes);
   app.use('/api/notifications', notificationRoutes);

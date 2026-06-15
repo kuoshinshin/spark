@@ -119,21 +119,6 @@ async function initDatabase() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
     
-    // 创建比赛表
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS matches (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        title VARCHAR(100) NOT NULL,
-        description TEXT,
-        start_time DATETIME NOT NULL,
-        end_time DATETIME NOT NULL,
-        location VARCHAR(255),
-        status ENUM('upcoming', 'ongoing', 'completed') DEFAULT 'upcoming',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-      )
-    `);
-    
     // 创建轮播表
     await connection.execute(`
       CREATE TABLE IF NOT EXISTS carousel_slides (

@@ -39,9 +39,9 @@ const handleSlideButtonClick = (action) => {
           </el-carousel-item>
           <el-carousel-item>
             <div class="carousel-slide">
-              <h3>查看最新比赛赛程</h3>
-              <p>了解团队近期比赛安排</p>
-              <el-button type="primary" @click="handleSlideButtonClick('schedule')">查看赛程</el-button>
+              <h3>队内赛事（筹备中）</h3>
+              <p>比赛模块正在重新设计</p>
+              <el-button type="primary" @click="router.push('/match')">了解更多</el-button>
             </div>
           </el-carousel-item>
           <el-carousel-item>
@@ -72,11 +72,11 @@ const handleSlideButtonClick = (action) => {
           <el-card class="feature-card" shadow="hover">
             <template #header>
               <div class="card-header">
-                <h3>比赛信息</h3>
+                <h3>比赛</h3>
               </div>
             </template>
-            <p>查看团队比赛安排，赛事结果和排名，参与队内比赛</p>
-            <el-button type="primary" @click="router.push('/match')">查看比赛</el-button>
+            <p>队内赛事模块筹备中，新版本上线后将支持报名与积分榜</p>
+            <el-button type="primary" @click="router.push('/match')">进入比赛</el-button>
           </el-card>
 
           <el-card class="feature-card" shadow="hover">
