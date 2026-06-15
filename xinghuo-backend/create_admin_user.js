@@ -22,9 +22,8 @@ async function createAdminUser() {
 
     await pool.execute(
       `INSERT INTO users (account, username, email, password, role)
-       VALUES ('admin', '管理员', ?, ?, 'superadmin')
+       VALUES ('admin', 'admin', ?, ?, 'superadmin')
        ON DUPLICATE KEY UPDATE
-         username = VALUES(username),
          email = VALUES(email),
          password = VALUES(password),
          role = VALUES(role)`,

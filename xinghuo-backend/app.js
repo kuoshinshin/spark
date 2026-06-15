@@ -332,6 +332,149 @@ async function startServer() {
         'ALTER TABLE team_players ADD UNIQUE KEY uniq_team_players_user_id (user_id(191))'
       );
     }
+    // 旧版社区活动表与 V2 杯赛 events 同名但结构不同
+    if (await tableExists('events')) {
+      const [cupCols] = await connection.execute(
+        `SELECT 1 FROM information_schema.columns
+         WHERE table_schema = DATABASE() AND table_name = 'events' AND column_name = 'team_count'
+         LIMIT 1`
+      );
+      if (!cupCols.length) {
+        await connection.execute('RENAME TABLE events TO legacy_community_events');
+        console.log('[migrate] 旧版 events 表已重命名为 legacy_community_events');
+      }
+    }
+    const cupFkParent = async (tableName) => {
+      const [refs] = await connection.execute(
+        `SELECT REFERENCED_TABLE_NAME AS ref
+         FROM information_schema.KEY_COLUMN_USAGE
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND REFERENCED_TABLE_NAME IS NOT NULL
+         LIMIT 1`,
+        [tableName]
+      );
+      return refs[0]?.ref || null;
+    };
+    const isCupEventsTable = async (tableName) => {
+      if (!(await tableExists(tableName))) return false;
+      const [cols] = await connection.execute(
+        `SELECT 1 FROM information_schema.columns
+         WHERE table_schema = DATABASE() AND table_name = ? AND column_name = 'team_count'
+         LIMIT 1`,
+        [tableName]
+      );
+      return cols.length > 0;
+    };
+    if (await tableExists('event_team_slots')) {
+      const parent = await cupFkParent('event_team_slots');
+      if (parent && !(await isCupEventsTable(parent))) {
+        await connection.execute('DROP TABLE event_team_slots');
+        console.log('[migrate] 已删除旧版 event_team_slots');
+      }
+    }
+    if (await tableExists('event_teams')) {
+      const parent = await cupFkParent('event_teams');
+      if (parent && !(await isCupEventsTable(parent))) {
+        await connection.execute('DROP TABLE event_teams');
+        console.log('[migrate] 已删除旧版 event_teams');
+      }
+    }
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS events (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        title VARCHAR(100) NOT NULL,
+        description TEXT,
+        status ENUM('draft', 'registration', 'locked', 'scoring', 'finished') NOT NULL DEFAULT 'draft',
+        team_count INT NOT NULL DEFAULT 16,
+        slots_per_team INT NOT NULL DEFAULT 5,
+        registration_open_at DATETIME NULL,
+        registration_close_at DATETIME NULL,
+        locked_at DATETIME NULL,
+        finished_at DATETIME NULL,
+        scoring_config JSON NULL,
+        require_pubg_binding TINYINT(1) NOT NULL DEFAULT 1,
+        created_by INT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        KEY idx_events_status (status)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS event_teams (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        event_id INT NOT NULL,
+        team_number INT NOT NULL,
+        team_name VARCHAR(64) NOT NULL,
+        captain_user_id INT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_event_team_number (event_id, team_number),
+        KEY idx_event_teams_event_id (event_id),
+        CONSTRAINT fk_event_teams_event_id FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS event_team_slots (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        event_id INT NOT NULL,
+        event_team_id INT NOT NULL,
+        slot_index INT NOT NULL,
+        user_id INT NULL,
+        display_name VARCHAR(64) NULL,
+        pubg_player_name VARCHAR(64) NULL,
+        joined_at DATETIME NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_event_team_slot (event_team_id, slot_index),
+        UNIQUE KEY uniq_event_user (event_id, user_id),
+        KEY idx_event_slots_event_id (event_id),
+        CONSTRAINT fk_event_slots_event_id FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+        CONSTRAINT fk_event_slots_team_id FOREIGN KEY (event_team_id) REFERENCES event_teams(id) ON DELETE CASCADE,
+        CONSTRAINT fk_event_slots_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    await ensureColumn(
+      'event_team_slots',
+      'spark_score',
+      'ALTER TABLE event_team_slots ADD COLUMN spark_score INT NULL AFTER pubg_player_name'
+    );
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS event_rounds (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        event_id INT NOT NULL,
+        round_no INT NOT NULL,
+        map_name VARCHAR(80) NULL,
+        status ENUM('pending', 'completed') NOT NULL DEFAULT 'pending',
+        completed_at DATETIME NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_event_round_no (event_id, round_no),
+        KEY idx_event_rounds_event_id (event_id),
+        CONSTRAINT fk_cup_event_rounds_event_id FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS event_round_results (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        event_id INT NOT NULL,
+        round_id INT NOT NULL,
+        event_team_id INT NOT NULL,
+        placement INT NOT NULL,
+        kills INT NOT NULL DEFAULT 0,
+        placement_points INT NOT NULL DEFAULT 0,
+        kill_points INT NOT NULL DEFAULT 0,
+        total_points INT NOT NULL DEFAULT 0,
+        updated_by INT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_round_team (round_id, event_team_id),
+        KEY idx_round_results_event_id (event_id),
+        KEY idx_round_results_round_id (round_id),
+        CONSTRAINT fk_cup_round_results_event_id FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+        CONSTRAINT fk_cup_round_results_round_id FOREIGN KEY (round_id) REFERENCES event_rounds(id) ON DELETE CASCADE,
+        CONSTRAINT fk_cup_round_results_team_id FOREIGN KEY (event_team_id) REFERENCES event_teams(id) ON DELETE CASCADE,
+        CONSTRAINT fk_cup_round_results_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
     const ensureInviteCodes = require('./config/ensureInviteCodes');
     await ensureInviteCodes(connection);
     connection.release();
@@ -345,6 +488,7 @@ async function startServer() {
   const userRoutes = require('./routes/user');
   const chatRoutes = require('./routes/chat');
   const carouselRoutes = require('./routes/carousel');
+  const eventRoutes = require('./routes/event');
   const shareRoutes = require('./routes/share');
   const inviteCodeRoutes = require('./routes/inviteCodes');
   const notificationRoutes = require('./routes/notification');
@@ -354,6 +498,7 @@ async function startServer() {
   app.use('/api/user', userRoutes);
   app.use('/api/chat', chatRoutes);
   app.use('/api/carousel', carouselRoutes);
+  app.use('/api/events', eventRoutes);
   app.use('/api/share', shareRoutes);
   app.use('/api/notifications', notificationRoutes);
 

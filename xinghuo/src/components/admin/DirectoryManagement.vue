@@ -17,8 +17,9 @@ const role = ref(getRole())
 const isAdmin = computed(() => ['admin', 'superadmin'].includes(role.value))
 const canDeleteUser = computed(() => role.value === 'superadmin')
 
-const activeTab = ref('carousel')
+const activeTab = ref('event')
 const tabLabels = {
+  event: '杯赛管理',
   carousel: '轮播管理',
   chat: '圈子管理',
   user: '个人管理',
@@ -28,12 +29,22 @@ const activeModuleLabel = computed(() => tabLabels[activeTab.value] || '')
 const loading = ref(false)
 
 const carousels = ref([])
+const events = ref([])
 const chats = ref([])
 const users = ref([])
 const inviteCodes = ref([])
 
 const dialogType = ref('')
 const dialogVisible = ref(false)
+
+const eventForm = reactive({
+  id: null,
+  title: '',
+  description: '',
+  registration_open_at: '',
+  registration_close_at: '',
+  require_pubg_binding: true,
+})
 
 const carouselForm = reactive({
   id: null,
@@ -72,6 +83,17 @@ const pickFirstUsableInviteCode = () => {
   return list.length ? list[0].code : ''
 }
 
+const resetEventForm = () => {
+  Object.assign(eventForm, {
+    id: null,
+    title: '',
+    description: '',
+    registration_open_at: '',
+    registration_close_at: '',
+    require_pubg_binding: true,
+  })
+}
+
 const resetCarouselForm = () => {
   Object.assign(carouselForm, {
     id: null, title: '', subtitle: '', content: '', type: 'text', buttons: '',
@@ -105,6 +127,7 @@ const resetInviteForm = () => {
 
 const openCreateDialog = (type) => {
   dialogType.value = type
+  if (type === 'event') resetEventForm()
   if (type === 'carousel') resetCarouselForm()
   if (type === 'user') resetUserForm()
   if (type === 'invite') resetInviteForm()
@@ -113,6 +136,16 @@ const openCreateDialog = (type) => {
 
 const openEditDialog = (type, row) => {
   dialogType.value = type
+  if (type === 'event') {
+    Object.assign(eventForm, {
+      id: row.id,
+      title: row.title,
+      description: row.description || '',
+      registration_open_at: row.registrationOpenAt || row.registration_open_at || '',
+      registration_close_at: row.registrationCloseAt || row.registration_close_at || '',
+      require_pubg_binding: row.requirePubgBinding ?? row.require_pubg_binding ?? true,
+    })
+  }
   if (type === 'carousel') Object.assign(carouselForm, row)
   if (type === 'user') Object.assign(userForm, { ...row, password: '' })
   if (type === 'invite') {
@@ -144,6 +177,21 @@ const userRoleLabel = (v) => {
   return map[v] || v || '-'
 }
 
+const eventStatusLabel = (v) => {
+  const map = {
+    draft: '筹备中',
+    registration: '报名中',
+    locked: '名单已锁定',
+    scoring: '录入成绩',
+    finished: '已结束',
+  }
+  return map[v] || v || '-'
+}
+
+const loadEvents = async () => {
+  events.value = await adminApi.events.getAll()
+}
+
 const loadCarousels = async () => {
   carousels.value = await adminApi.carousel.getAll()
 }
@@ -164,7 +212,7 @@ const loadAll = async () => {
   if (!isAdmin.value) return
   loading.value = true
   try {
-    await Promise.all([loadCarousels(), loadChats(), loadUsers(), loadInviteCodes()])
+    await Promise.all([loadEvents(), loadCarousels(), loadChats(), loadUsers(), loadInviteCodes()])
   } catch (e) {
     ElMessage.error(e?.message || '后台数据加载失败')
   } finally {
@@ -174,6 +222,7 @@ const loadAll = async () => {
 
 const loadActiveTabData = async (tab) => {
   if (!isAdmin.value) return
+  if (tab === 'event') return loadEvents()
   if (tab === 'carousel') return loadCarousels()
   if (tab === 'chat') return loadChats()
   if (tab === 'user') return loadUsers()
@@ -183,6 +232,19 @@ const loadActiveTabData = async (tab) => {
 const submitDialog = async () => {
   try {
     loading.value = true
+    if (dialogType.value === 'event') {
+      const payload = {
+        title: eventForm.title,
+        description: eventForm.description,
+        registration_open_at: eventForm.registration_open_at || null,
+        registration_close_at: eventForm.registration_close_at || null,
+        require_pubg_binding: eventForm.require_pubg_binding,
+      }
+      if (eventForm.id) await adminApi.events.update(eventForm.id, payload)
+      else await adminApi.events.create(payload)
+      await loadEvents()
+    }
+
     if (dialogType.value === 'carousel') {
       const payload = {
         title: carouselForm.title,
@@ -260,6 +322,190 @@ const submitDialog = async () => {
   }
 }
 
+const publishEvent = async (row) => {
+  try {
+    loading.value = true
+    await adminApi.events.publish(row.id)
+    await loadEvents()
+    ElMessage.success('杯赛已发布')
+  } catch (e) {
+    ElMessage.error(e?.message || '发布失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+const lockEvent = async (row) => {
+  try {
+    loading.value = true
+    await adminApi.events.lock(row.id)
+    await loadEvents()
+    ElMessage.success('名单已锁定')
+  } catch (e) {
+    ElMessage.error(e?.message || '锁定失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+const scoringVisible = ref(false)
+const scoringLoading = ref(false)
+const scoringEvent = ref(null)
+const scoringRounds = ref([])
+const scoringTeams = ref([])
+const selectedRoundId = ref(null)
+const scoreRows = ref([])
+const newRoundMap = ref('')
+
+const buildScoreRows = (results = []) => {
+  const resultMap = new Map(results.map((r) => [r.teamId, r]))
+  return scoringTeams.value.map((team) => {
+    const existing = resultMap.get(team.id)
+    return {
+      eventTeamId: team.id,
+      teamNumber: team.teamNumber,
+      teamName: team.teamName,
+      placement: existing?.placement ?? '',
+      kills: existing?.kills ?? 0,
+    }
+  })
+}
+
+const loadScoringData = async () => {
+  if (!scoringEvent.value?.id) return
+  scoringLoading.value = true
+  try {
+    const data = await adminApi.events.getRounds(scoringEvent.value.id)
+    scoringRounds.value = data.rounds || []
+    scoringTeams.value = data.teams || []
+    if (scoringEvent.value) {
+      scoringEvent.value = { ...scoringEvent.value, status: data.event?.status || scoringEvent.value.status }
+    }
+  } catch (e) {
+    ElMessage.error(e?.message || '加载局次失败')
+  } finally {
+    scoringLoading.value = false
+  }
+}
+
+const openScoringDialog = async (row) => {
+  scoringEvent.value = { ...row }
+  selectedRoundId.value = null
+  scoreRows.value = []
+  newRoundMap.value = ''
+  scoringVisible.value = true
+  await loadScoringData()
+}
+
+const startScoring = async (row) => {
+  try {
+    loading.value = true
+    await adminApi.events.startScoring(row.id)
+    await loadEvents()
+    ElMessage.success('已进入录分阶段')
+  } catch (e) {
+    ElMessage.error(e?.message || '开始录分失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+const finishEvent = async (row) => {
+  if (!row?.id) {
+    ElMessage.warning('杯赛信息无效')
+    return
+  }
+  try {
+    await ElMessageBox.confirm('确定结束杯赛？结束后榜单将定格。', '结束杯赛', {
+      type: 'warning',
+      confirmButtonText: '结束',
+      cancelButtonText: '取消',
+      zIndex: 12000,
+      appendTo: document.body,
+    })
+  } catch {
+    return
+  }
+  try {
+    loading.value = true
+    await adminApi.events.finish(row.id)
+    await loadEvents()
+    if (scoringVisible.value && scoringEvent.value?.id === row.id) {
+      scoringVisible.value = false
+    }
+    ElMessage.success('杯赛已结束')
+  } catch (e) {
+    ElMessage.error(e?.message || '结束杯赛失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+const addRound = async () => {
+  if (!scoringEvent.value?.id) return
+  try {
+    scoringLoading.value = true
+    await adminApi.events.createRound(scoringEvent.value.id, {
+      map_name: newRoundMap.value || null,
+    })
+    newRoundMap.value = ''
+    await loadScoringData()
+    await loadEvents()
+    ElMessage.success('局次已创建')
+  } catch (e) {
+    ElMessage.error(e?.message || '创建局次失败')
+  } finally {
+    scoringLoading.value = false
+  }
+}
+
+const selectRound = async (round) => {
+  selectedRoundId.value = round.id
+  scoringLoading.value = true
+  try {
+    const data = await adminApi.events.getRoundResults(scoringEvent.value.id, round.id)
+    scoreRows.value = buildScoreRows(data.results || [])
+  } catch (e) {
+    scoreRows.value = buildScoreRows()
+    ElMessage.error(e?.message || '加载成绩失败')
+  } finally {
+    scoringLoading.value = false
+  }
+}
+
+const saveRoundScores = async () => {
+  if (!selectedRoundId.value) return
+  const results = scoreRows.value.map((row) => ({
+    eventTeamId: row.eventTeamId,
+    placement: Number(row.placement),
+    kills: Number(row.kills) || 0,
+  }))
+  try {
+    scoringLoading.value = true
+    await adminApi.events.saveRoundResults(scoringEvent.value.id, selectedRoundId.value, results)
+    ElMessage.success('成绩已保存')
+    await loadScoringData()
+    await loadEvents()
+  } catch (e) {
+    ElMessage.error(e?.message || '保存成绩失败')
+  } finally {
+    scoringLoading.value = false
+  }
+}
+
+const completeRound = async (round) => {
+  try {
+    scoringLoading.value = true
+    await adminApi.events.completeRound(scoringEvent.value.id, round.id)
+    await loadScoringData()
+    ElMessage.success(`第 ${round.roundNo} 局已完成`)
+  } catch (e) {
+    ElMessage.error(e?.message || '完成局次失败')
+  } finally {
+    scoringLoading.value = false
+  }
+}
+
 const removeCarousel = async (id) => {
   try {
     await adminApi.carousel.delete(id)
@@ -328,11 +574,12 @@ watch(activeTab, async (tab) => {
       <template v-else>
         <header class="admin-page-header">
           <h1 class="admin-page-title">后台管理</h1>
-          <p class="admin-page-desc">与全站风格一致的管理中心，维护轮播、圈子、用户与邀请码。</p>
+          <p class="admin-page-desc">与全站风格一致的管理中心，维护杯赛、轮播、圈子、用户与邀请码。</p>
         </header>
 
         <div class="admin-panel">
           <el-tabs v-model="activeTab" class="admin-tabs">
+            <el-tab-pane label="杯赛管理" name="event" />
             <el-tab-pane label="轮播管理" name="carousel" />
             <el-tab-pane label="圈子管理" name="chat" />
             <el-tab-pane label="个人管理" name="user" />
@@ -343,7 +590,7 @@ watch(activeTab, async (tab) => {
             <div class="toolbar">
               <span class="toolbar-label">{{ activeModuleLabel }}</span>
               <el-button
-                v-if="activeTab === 'carousel' || activeTab === 'user' || activeTab === 'invite'"
+                v-if="activeTab === 'event' || activeTab === 'carousel' || activeTab === 'user' || activeTab === 'invite'"
                 type="primary"
                 @click="openCreateDialog(activeTab)"
               >
@@ -351,6 +598,77 @@ watch(activeTab, async (tab) => {
                 新增
               </el-button>
             </div>
+
+            <el-table v-if="activeTab === 'event'" :data="events" border class="admin-table">
+          <el-table-column prop="id" label="ID" width="70" />
+          <el-table-column prop="title" label="杯赛名称" min-width="160" />
+          <el-table-column label="状态" width="120">
+            <template #default="scope">{{ eventStatusLabel(scope.row.status) }}</template>
+          </el-table-column>
+          <el-table-column label="报名开始" width="170">
+            <template #default="scope">{{ formatDate(scope.row.registration_open_at || scope.row.registrationOpenAt) }}</template>
+          </el-table-column>
+          <el-table-column label="报名截止" width="170">
+            <template #default="scope">{{ formatDate(scope.row.registration_close_at || scope.row.registrationCloseAt) }}</template>
+          </el-table-column>
+          <el-table-column label="需绑定PUBG" width="110">
+            <template #default="scope">
+              {{ (scope.row.require_pubg_binding ?? scope.row.requirePubgBinding) ? '是' : '否' }}
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="360" fixed="right">
+            <template #default="scope">
+              <el-button
+                v-if="scope.row.status === 'draft'"
+                type="primary"
+                size="small"
+                @click="openEditDialog('event', scope.row)"
+              >
+                <el-icon><Edit /></el-icon>
+              </el-button>
+              <el-button
+                v-if="scope.row.status === 'draft'"
+                type="success"
+                size="small"
+                @click="publishEvent(scope.row)"
+              >
+                发布
+              </el-button>
+              <el-button
+                v-if="scope.row.status === 'registration'"
+                type="warning"
+                size="small"
+                @click="lockEvent(scope.row)"
+              >
+                锁名单
+              </el-button>
+              <el-button
+                v-if="scope.row.status === 'locked'"
+                type="primary"
+                size="small"
+                @click="startScoring(scope.row)"
+              >
+                开始录分
+              </el-button>
+              <el-button
+                v-if="scope.row.status === 'locked' || scope.row.status === 'scoring'"
+                type="success"
+                size="small"
+                @click="openScoringDialog(scope.row)"
+              >
+                录分
+              </el-button>
+              <el-button
+                v-if="scope.row.status === 'scoring'"
+                type="danger"
+                size="small"
+                @click.stop="finishEvent(scope.row)"
+              >
+                结束
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
 
             <el-table v-if="activeTab === 'carousel'" :data="carousels" border class="admin-table">
           <el-table-column prop="id" label="ID" width="80" />
@@ -431,11 +749,19 @@ watch(activeTab, async (tab) => {
         <el-dialog
           v-model="dialogVisible"
           class="admin-dialog"
-          :title="dialogType === 'carousel' ? '轮播' : dialogType === 'invite' ? '邀请码' : '用户'"
+          :title="dialogType === 'event' ? '杯赛' : dialogType === 'carousel' ? '轮播' : dialogType === 'invite' ? '邀请码' : '用户'"
           width="560px"
           align-center
         >
-        <div v-if="dialogType === 'carousel'" class="form-grid">
+        <div v-if="dialogType === 'event'" class="form-grid">
+          <el-input v-model="eventForm.title" placeholder="杯赛名称" />
+          <el-input v-model="eventForm.description" type="textarea" :rows="3" placeholder="简介（可选）" />
+          <el-input v-model="eventForm.registration_open_at" placeholder="报名开始（ISO 或 YYYY-MM-DD HH:mm:ss，可留空）" />
+          <el-input v-model="eventForm.registration_close_at" placeholder="报名截止（可留空）" />
+          <el-switch v-model="eventForm.require_pubg_binding" active-text="需绑定 PUBG" inactive-text="无需绑定" />
+        </div>
+
+        <div v-else-if="dialogType === 'carousel'" class="form-grid">
           <el-input v-model="carouselForm.title" placeholder="标题" />
           <el-input v-model="carouselForm.subtitle" placeholder="副标题" />
           <el-select v-model="carouselForm.type" placeholder="轮播类型" style="width: 100%">
@@ -454,7 +780,7 @@ watch(activeTab, async (tab) => {
           <el-switch v-model="inviteForm.is_active" active-text="启用" inactive-text="停用" />
         </div>
 
-        <div v-else class="form-grid">
+        <div v-else-if="dialogType === 'user'" class="form-grid">
           <el-input v-model="userForm.account" :disabled="!!userForm.id" placeholder="账号" />
           <el-input v-model="userForm.username" placeholder="用户名" />
           <el-input v-model="userForm.real_name" placeholder="真实姓名（可选）" />
@@ -488,6 +814,99 @@ watch(activeTab, async (tab) => {
           <el-button @click="dialogVisible = false">取消</el-button>
           <el-button type="primary" @click="submitDialog">保存</el-button>
         </template>
+        </el-dialog>
+
+        <el-dialog
+          v-model="scoringVisible"
+          class="admin-dialog scoring-dialog"
+          :title="scoringEvent ? `录分 · ${scoringEvent.title}` : '录分'"
+          width="min(1200px, 96vw)"
+          align-center
+          destroy-on-close
+        >
+          <div v-loading="scoringLoading" class="scoring-body">
+            <div class="scoring-toolbar">
+              <el-input v-model="newRoundMap" class="map-input" placeholder="地图名（可选）" />
+              <el-button type="primary" @click="addRound">新建局次</el-button>
+              <el-button
+                v-if="scoringEvent?.status === 'scoring'"
+                type="danger"
+                plain
+                class="finish-btn"
+                @click="finishEvent(scoringEvent)"
+              >
+                结束杯赛
+              </el-button>
+            </div>
+
+            <div class="scoring-layout">
+              <div class="round-list">
+                <p class="section-label">局次列表</p>
+                <el-empty v-if="!scoringRounds.length" description="请先新建局次" :image-size="60" />
+                <button
+                  v-for="round in scoringRounds"
+                  :key="round.id"
+                  type="button"
+                  class="round-item"
+                  :class="{ active: selectedRoundId === round.id }"
+                  @click="selectRound(round)"
+                >
+                  <span>第 {{ round.roundNo }} 局</span>
+                  <span v-if="round.mapName" class="round-map-name">· {{ round.mapName }}</span>
+                  <el-tag size="small" :type="round.status === 'completed' ? 'success' : 'info'">
+                    {{ round.status === 'completed' ? '已完成' : '待录入' }}
+                  </el-tag>
+                </button>
+              </div>
+
+              <div class="score-panel">
+                <template v-if="selectedRoundId">
+                  <p class="section-label">录入 16 队名次与击杀（名次 1–16 不可重复）</p>
+                  <div class="score-table-wrap">
+                    <el-table :data="scoreRows" border size="small" class="score-table">
+                      <el-table-column prop="teamNumber" label="#" width="56" align="center" />
+                      <el-table-column prop="teamName" label="队伍" min-width="140" show-overflow-tooltip />
+                      <el-table-column label="名次" width="148" align="center">
+                        <template #default="scope">
+                          <el-input-number
+                            v-model="scope.row.placement"
+                            class="score-input"
+                            :min="1"
+                            :max="16"
+                            controls-position="right"
+                          />
+                        </template>
+                      </el-table-column>
+                      <el-table-column label="击杀" width="148" align="center">
+                        <template #default="scope">
+                          <el-input-number
+                            v-model="scope.row.kills"
+                            class="score-input"
+                            :min="0"
+                            controls-position="right"
+                          />
+                        </template>
+                      </el-table-column>
+                    </el-table>
+                  </div>
+                  <div class="score-actions">
+                    <el-button type="primary" @click="saveRoundScores">保存成绩</el-button>
+                    <el-button
+                      v-for="round in scoringRounds.filter((r) => r.id === selectedRoundId)"
+                      :key="round.id"
+                      type="success"
+                      plain
+                      :disabled="round.status === 'completed'"
+                      @click="completeRound(round)"
+                    >
+                      完成本局
+                    </el-button>
+                  </div>
+                </template>
+                <el-empty v-else description="请选择左侧局次" />
+              </div>
+            </div>
+          </div>
         </el-dialog>
       </template>
     </div>
@@ -643,6 +1062,173 @@ watch(activeTab, async (tab) => {
   .admin-page-title {
     font-size: 1.45rem;
   }
+}
+
+.scoring-toolbar {
+  display: flex;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.map-input {
+  width: min(240px, 100%);
+}
+
+.finish-btn {
+  margin-left: auto;
+}
+
+.scoring-dialog :deep(.el-dialog__body) {
+  padding-top: 12px;
+  max-height: calc(100vh - 140px);
+  overflow: auto;
+}
+
+.scoring-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.section-label {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: #86868b;
+}
+
+.round-list {
+  border: 1px solid #e5e5ea;
+  border-radius: 8px;
+  padding: 0.75rem;
+  max-height: calc(100vh - 240px);
+  overflow-y: auto;
+}
+
+.round-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  margin-bottom: 0.35rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: #fafafa;
+  color: #1d1d1f;
+  text-align: left;
+  cursor: pointer;
+}
+
+.round-map-name {
+  color: #6e6e73;
+  font-size: 0.85rem;
+}
+
+.round-item.active {
+  border-color: #0071e3;
+  background: #f0f7ff;
+}
+
+.score-panel {
+  border: 1px solid #e5e5ea;
+  border-radius: 8px;
+  padding: 0.75rem;
+  min-width: 0;
+}
+
+.score-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.score-table {
+  width: 100%;
+}
+
+.score-table :deep(.el-input-number) {
+  width: 120px;
+}
+
+.score-table :deep(.el-input-number .el-input__wrapper) {
+  padding-left: 8px;
+  padding-right: 32px;
+}
+
+.score-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  flex-wrap: wrap;
+}
+
+:global(.dark-mode) .scoring-dialog .round-item {
+  background: #2c2c2e;
+  border-color: #48484a;
+  color: #f5f5f7;
+}
+
+:global(.dark-mode) .scoring-dialog .round-map-name {
+  color: #a1a1a6;
+}
+
+:global(.dark-mode) .scoring-dialog .round-item.active {
+  background: #1a3a5c;
+  border-color: #409eff;
+}
+
+:global(.dark-mode) .scoring-dialog .round-list,
+:global(.dark-mode) .scoring-dialog .score-panel {
+  border-color: #48484a;
+}
+
+:global(.dark-mode) .scoring-dialog .section-label {
+  color: #a1a1a6;
+}
+
+@media (max-width: 768px) {
+  .scoring-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .round-list {
+    max-height: 200px;
+  }
+}
+</style>
+
+<style>
+.el-dialog.scoring-dialog {
+  width: min(1200px, 96vw) !important;
+  margin: 4vh auto !important;
+  display: flex;
+  flex-direction: column;
+  max-height: 92vh;
+}
+
+.el-dialog.scoring-dialog .el-dialog__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+</style>
+
+<style>
+.el-dialog.scoring-dialog {
+  width: min(1200px, 96vw) !important;
+  margin: 4vh auto !important;
+  display: flex;
+  flex-direction: column;
+  max-height: 92vh;
+}
+
+.el-dialog.scoring-dialog .el-dialog__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 </style>
 

@@ -259,6 +259,30 @@ p {
   font-weight: 600 !important;
 }
 
+.el-message-box {
+  border-radius: 12px !important;
+}
+
+.el-message-box__title,
+.el-message-box__message {
+  color: #1d1d1f !important;
+}
+
+.dark-mode .el-message-box {
+  background-color: #1e1e1e !important;
+  border: 1px solid #333333 !important;
+}
+
+.dark-mode .el-message-box__title,
+.dark-mode .el-message-box__message,
+.dark-mode .el-message-box__content {
+  color: #f5f5f7 !important;
+}
+
+.dark-mode .el-overlay.is-message-box {
+  z-index: 11999 !important;
+}
+
 /*
  * 弹窗 / 确认框 / 抽屉 关闭按钮为原生 <button>，
  * 需覆盖上方全局 `button` / `button:hover` 的深色药丸样式，避免 hover 出现黑圆底。
@@ -1070,16 +1094,24 @@ html {
   scrollbar-gutter: stable;
 }
 
+/* Element Plus 弹窗锁滚动时会改 body/html 的 padding，与 scrollbar-gutter 叠加导致抖动 */
+html.el-popup-parent--hidden,
+body.el-popup-parent--hidden {
+  padding-right: 0 !important;
+  margin-right: 0 !important;
+  width: 100% !important;
+}
+
+/* 固定顶栏不随 body padding 补偿位移 */
+.navbar {
+  padding-right: 0 !important;
+}
+
 /* 兼容不支持 scrollbar-gutter 的环境 */
 @supports not (scrollbar-gutter: stable) {
   body {
     overflow-y: scroll;
   }
-}
-
-/* Element Plus 弹窗打开时会给 body 注入 padding-right 作为滚动条补偿，可能触发主体横向抖动 */
-body.el-popup-parent--hidden {
-  padding-right: 0 !important;
 }
 
 /* 图片懒加载 */

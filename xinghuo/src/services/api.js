@@ -318,6 +318,27 @@ export const notificationApi = {
   },
 };
 
+// 杯赛 V2 API
+export const eventApi = {
+  getCurrent: async () => request('/events/current', { skipCache: true }),
+  getLobby: async () => request('/events/current/lobby', { skipCache: true }),
+  getRounds: async () => request('/events/current/rounds', { skipCache: true }),
+  getStandings: async () => request('/events/current/standings', { skipCache: true }),
+  getRoundResults: async (roundId) => request(`/events/current/rounds/${roundId}/results`, { skipCache: true }),
+  joinSlot: async (teamId, slotIndex) => {
+    const data = await request(`/events/current/teams/${teamId}/slots/${slotIndex}/join`, {
+      method: 'POST',
+    });
+    invalidateCacheByEndpoints(['/events/current']);
+    return data;
+  },
+  leave: async () => {
+    const data = await request('/events/current/leave', { method: 'POST' });
+    invalidateCacheByEndpoints(['/events/current']);
+    return data;
+  },
+};
+
 // 用户相关 API
 export const userApi = {
   // 获取用户信息
@@ -527,6 +548,34 @@ export const adminApi = {
         method: 'DELETE',
       });
     },
+  },
+  events: {
+    getAll: async () => request('/events', { skipCache: true }),
+    create: async (payload) => request('/events', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+    update: async (id, payload) => request(`/events/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+    publish: async (id) => request(`/events/${id}/publish`, { method: 'POST' }),
+    lock: async (id) => request(`/events/${id}/lock`, { method: 'POST' }),
+    startScoring: async (id) => request(`/events/${id}/start-scoring`, { method: 'POST' }),
+    finish: async (id) => request(`/events/${id}/finish`, { method: 'POST' }),
+    getRounds: async (id) => request(`/events/${id}/rounds`, { skipCache: true }),
+    getStandings: async (id) => request(`/events/${id}/standings`, { skipCache: true }),
+    getRoundResults: async (id, roundId) => request(`/events/${id}/rounds/${roundId}/results`, { skipCache: true }),
+    createRound: async (id, payload) => request(`/events/${id}/rounds`, {
+      method: 'POST',
+      body: JSON.stringify(payload || {}),
+    }),
+    saveRoundResults: async (id, roundId, results) => request(`/events/${id}/rounds/${roundId}/results`, {
+      method: 'PUT',
+      body: JSON.stringify({ results }),
+    }),
+    completeRound: async (id, roundId) => request(`/events/${id}/rounds/${roundId}/complete`, { method: 'POST' }),
+    clearSlot: async (slotId) => request(`/events/slots/${slotId}`, { method: 'DELETE' }),
   },
   carousel: {
     getAll: async () => request('/carousel/all'),
