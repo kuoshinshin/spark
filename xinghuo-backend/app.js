@@ -475,6 +475,85 @@ async function startServer() {
         CONSTRAINT fk_cup_round_results_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS event_basic_info (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        event_id INT NOT NULL,
+        content TEXT NOT NULL,
+        placement_points JSON NOT NULL,
+        points_per_kill INT NOT NULL DEFAULT 1,
+        updated_by INT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_event_basic_info_event_id (event_id),
+        KEY idx_event_basic_info_event_id (event_id),
+        CONSTRAINT fk_event_basic_info_event_id FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+        CONSTRAINT fk_event_basic_info_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    const {
+      getDefaultBasicInfoContent,
+      getDefaultScoringConfig,
+      normalizePlacementPoints,
+    } = require('./services/eventScoring');
+    const [eventsWithoutBasicInfo] = await connection.execute(`
+      SELECT e.id, e.description, e.scoring_config
+      FROM events e
+      LEFT JOIN event_basic_info b ON b.event_id = e.id
+      WHERE b.id IS NULL
+    `);
+    const defaultScoring = getDefaultScoringConfig();
+    for (const eventRow of eventsWithoutBasicInfo) {
+      let placementPoints = { ...defaultScoring.placementPoints };
+      let pointsPerKill = defaultScoring.pointsPerKill;
+      if (eventRow.scoring_config) {
+        try {
+          const cfg = typeof eventRow.scoring_config === 'string'
+            ? JSON.parse(eventRow.scoring_config)
+            : eventRow.scoring_config;
+          if (cfg?.placementPoints) placementPoints = cfg.placementPoints;
+          if (cfg?.pointsPerKill != null) pointsPerKill = cfg.pointsPerKill;
+        } catch (_) {}
+      }
+      const content = String(eventRow.description || '').trim() || getDefaultBasicInfoContent();
+      await connection.execute(
+        `INSERT INTO event_basic_info (event_id, content, placement_points, points_per_kill)
+         VALUES (?, ?, ?, ?)`,
+        [
+          eventRow.id,
+          content,
+          JSON.stringify(normalizePlacementPoints(placementPoints)),
+          Number(pointsPerKill) || 1,
+        ]
+      );
+    }
+    if (eventsWithoutBasicInfo.length) {
+      console.log(`[migrate] 已补齐 event_basic_info：${eventsWithoutBasicInfo.length} 条`);
+    }
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS event_round_member_results (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        event_id INT NOT NULL,
+        round_id INT NOT NULL,
+        event_team_id INT NOT NULL,
+        slot_index INT NOT NULL,
+        user_id INT NULL,
+        display_name VARCHAR(64) NULL,
+        kills INT NOT NULL DEFAULT 0,
+        updated_by INT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_round_team_slot (round_id, event_team_id, slot_index),
+        KEY idx_round_member_results_event_id (event_id),
+        KEY idx_round_member_results_round_id (round_id),
+        KEY idx_round_member_results_team_id (event_team_id),
+        CONSTRAINT fk_round_member_results_event_id FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+        CONSTRAINT fk_round_member_results_round_id FOREIGN KEY (round_id) REFERENCES event_rounds(id) ON DELETE CASCADE,
+        CONSTRAINT fk_round_member_results_team_id FOREIGN KEY (event_team_id) REFERENCES event_teams(id) ON DELETE CASCADE,
+        CONSTRAINT fk_round_member_results_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+        CONSTRAINT fk_round_member_results_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
     const ensureInviteCodes = require('./config/ensureInviteCodes');
     await ensureInviteCodes(connection);
     connection.release();

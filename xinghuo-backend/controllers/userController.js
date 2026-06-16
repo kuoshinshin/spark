@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs').promises;
 const UserModel = require('../models/userModel');
+const EventModel = require('../models/eventModel');
 const ChatModel = require('../models/chatModel');
 const { getPlayerByName, getLifetimeStats, getRecentMatches, getMatchesBySeason, getCompetitivePowerScore, getMatchById, getSeasons, parsePlayerStatsFromMatch, parseMatchDetailWithTeam } = require('../services/pubgApi');
 const { getOrRefresh, invalidateUserCache } = require('../services/pubgCacheService');
@@ -362,6 +363,16 @@ class UserController {
     } catch (error) {
       console.error('获取用户统计信息失败:', error);
       res.status(500).json({ error: '获取用户统计信息失败' });
+    }
+  }
+
+  static async getCupHistory(req, res) {
+    try {
+      const data = await EventModel.getUserCupHistory(req.user.id);
+      res.json(data);
+    } catch (error) {
+      console.error('获取杯赛战绩失败:', error);
+      res.status(500).json({ error: '获取杯赛战绩失败' });
     }
   }
   

@@ -15,18 +15,26 @@ router.post(
   EventController.joinSlot
 );
 router.post('/current/leave', verifyToken, verifyUser, EventController.leave);
+router.get('/current/teams/:teamId/round-details', verifyToken, verifyUser, EventController.getCurrentTeamRoundDetails);
 router.get('/current/rounds', verifyToken, verifyUser, EventController.getCurrentRounds);
 router.get('/current/standings', verifyToken, verifyUser, EventController.getCurrentStandings);
+router.get('/current/member-kills', verifyToken, verifyUser, EventController.getCurrentMemberKillLeaderboard);
+router.get('/history', verifyToken, verifyUser, EventController.listHistory);
+router.get('/history/:id', verifyToken, verifyUser, EventController.getHistoryArchive);
+router.get('/history/:id/teams/:teamId/round-details', verifyToken, verifyUser, EventController.getHistoryTeamRoundDetails);
 router.get('/current/rounds/:roundId/results', verifyToken, verifyUser, EventController.getCurrentRoundResults);
 
 // 管理端
 router.get('/', verifyToken, verifyAdmin, EventController.listAll);
 router.post('/', verifyToken, verifyAdmin, EventController.create);
+router.put('/:id/basic-info', verifyToken, verifyAdmin, EventController.updateBasicInfo);
+router.get('/:id/basic-info', verifyToken, verifyAdmin, EventController.getBasicInfo);
 router.put('/:id', verifyToken, verifyAdmin, EventController.update);
 router.post('/:id/publish', verifyToken, verifyAdmin, EventController.publish);
 router.post('/:id/lock', verifyToken, verifyAdmin, EventController.lock);
 router.post('/:id/start-scoring', verifyToken, verifyAdmin, EventController.startScoring);
 router.post('/:id/finish', verifyToken, verifyAdmin, EventController.finish);
+router.get('/:id/teams/:teamId/round-details', verifyToken, verifyAdmin, EventController.getEventTeamRoundDetails);
 router.get('/:id/rounds', verifyToken, verifyAdmin, EventController.getEventRounds);
 router.post('/:id/rounds', verifyToken, verifyAdmin, EventController.createRound);
 router.get('/:id/standings', verifyToken, verifyAdmin, EventController.getEventStandings);

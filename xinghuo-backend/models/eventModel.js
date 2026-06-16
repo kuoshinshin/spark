@@ -1,9 +1,17 @@
 const pool = require('../config/db');
 const {
   getDefaultScoringConfig,
+  getDefaultBasicInfoContent,
+  normalizePlacementPoints,
+  scoringConfigFromBasicInfo,
   calculateTeamPoints,
   validateRoundResults,
+  validateMemberResults,
+  normalizeRoundInput,
+  validateBasicInfoPayload,
   buildStandings,
+  resolveStoredRoundScores,
+  memberKillSumKey,
 } = require('../services/eventScoring');
 
 const ACTIVE_STATUSES = ['registration', 'locked', 'scoring'];
@@ -46,14 +54,7 @@ class EventModel {
   }
 
   static async getCurrentForUser() {
-    const active = await EventModel.getActiveEvent();
-    if (active) return active;
-    const [rows] = await pool.execute(
-      `SELECT * FROM events ORDER BY id DESC LIMIT 1`
-    );
-    const row = rows[0];
-    if (!row) return null;
-    return { ...row, scoring_config: parseScoringConfig(row.scoring_config) };
+    return EventModel.getActiveEvent();
   }
 
   static async listAll() {
@@ -98,7 +99,89 @@ class EventModel {
         data.created_by,
       ]
     );
-    return result.insertId;
+    const eventId = result.insertId;
+    await EventModel.ensureBasicInfo(eventId);
+    return eventId;
+  }
+
+  static parseBasicInfoRow(row) {
+    if (!row) return null;
+    let placementPoints = row.placement_points;
+    if (typeof placementPoints === 'string') {
+      try {
+        placementPoints = JSON.parse(placementPoints);
+      } catch {
+        placementPoints = null;
+      }
+    }
+    return {
+      ...row,
+      placement_points: normalizePlacementPoints(placementPoints),
+    };
+  }
+
+  static async getBasicInfo(eventId) {
+    const [rows] = await pool.execute(
+      'SELECT * FROM event_basic_info WHERE event_id = ? LIMIT 1',
+      [eventId]
+    );
+    return EventModel.parseBasicInfoRow(rows[0]);
+  }
+
+  static async getScoringConfigForEvent(eventId) {
+    const basicInfo = await EventModel.getBasicInfo(eventId);
+    if (basicInfo) return scoringConfigFromBasicInfo(basicInfo);
+    const event = await EventModel.findById(eventId);
+    return event?.scoring_config || getDefaultScoringConfig();
+  }
+
+  static async ensureBasicInfo(eventId, { content, placementPoints, pointsPerKill } = {}) {
+    const existing = await EventModel.getBasicInfo(eventId);
+    if (existing) return existing;
+    const defaults = getDefaultScoringConfig();
+    const payload = {
+      content: content || getDefaultBasicInfoContent(),
+      placement_points: JSON.stringify(normalizePlacementPoints(placementPoints || defaults.placementPoints)),
+      points_per_kill: pointsPerKill != null ? Number(pointsPerKill) : defaults.pointsPerKill,
+    };
+    await pool.execute(
+      `INSERT INTO event_basic_info (event_id, content, placement_points, points_per_kill)
+       VALUES (?, ?, ?, ?)`,
+      [eventId, payload.content, payload.placement_points, payload.points_per_kill]
+    );
+    return EventModel.getBasicInfo(eventId);
+  }
+
+  static async upsertBasicInfo(eventId, data, updatedBy = null) {
+    const validation = validateBasicInfoPayload({
+      content: data.content,
+      placementPoints: data.placement_points || data.placementPoints,
+      pointsPerKill: data.points_per_kill ?? data.pointsPerKill,
+    });
+    if (!validation.ok) return { ok: false, code: 'VALIDATION', message: validation.message };
+
+    const content = data.content != null ? String(data.content) : getDefaultBasicInfoContent();
+    const placementPoints = normalizePlacementPoints(data.placement_points || data.placementPoints);
+    const pointsPerKill = data.points_per_kill != null
+      ? Number(data.points_per_kill)
+      : Number(data.pointsPerKill ?? 1);
+
+    const existing = await EventModel.getBasicInfo(eventId);
+    if (existing) {
+      await pool.execute(
+        `UPDATE event_basic_info
+         SET content = ?, placement_points = ?, points_per_kill = ?, updated_by = ?
+         WHERE event_id = ?`,
+        [content, JSON.stringify(placementPoints), pointsPerKill, updatedBy, eventId]
+      );
+    } else {
+      await pool.execute(
+        `INSERT INTO event_basic_info (event_id, content, placement_points, points_per_kill, updated_by)
+         VALUES (?, ?, ?, ?, ?)`,
+        [eventId, content, JSON.stringify(placementPoints), pointsPerKill, updatedBy]
+      );
+    }
+    return { ok: true, basicInfo: await EventModel.getBasicInfo(eventId) };
   }
 
   static async update(id, data) {
@@ -201,13 +284,47 @@ class EventModel {
     return result.affectedRows > 0;
   }
 
+  static async canFinish(eventId) {
+    const event = await EventModel.findById(eventId);
+    if (!event) return { ok: false, code: 'NOT_FOUND', message: '杯赛不存在' };
+    if (event.status !== 'scoring') {
+      return { ok: false, code: 'INVALID_STATUS', message: '仅录分中的杯赛可结束' };
+    }
+    const rounds = await EventModel.getRounds(eventId);
+    if (!rounds.length) {
+      return { ok: false, code: 'NO_ROUNDS', message: '请先创建局次并完成全部成绩录入' };
+    }
+    const incompleteRounds = rounds.filter((round) => round.status !== 'completed');
+    if (incompleteRounds.length) {
+      const labels = incompleteRounds.map((round) => `第${round.round_no}局`).join('、');
+      return { ok: false, code: 'INCOMPLETE_ROUNDS', message: `尚有未完成局次：${labels}` };
+    }
+    const teams = await EventModel.getTeams(eventId);
+    for (const round of rounds) {
+      const results = await EventModel.getRoundResults(round.id);
+      if (results.length < teams.length) {
+        return {
+          ok: false,
+          code: 'INCOMPLETE_RESULTS',
+          message: `第 ${round.round_no} 局成绩不完整，请录入全部队伍成绩`,
+        };
+      }
+    }
+    return { ok: true };
+  }
+
   static async finish(eventId) {
+    const check = await EventModel.canFinish(eventId);
+    if (!check.ok) return check;
     const [result] = await pool.execute(
       `UPDATE events SET status = 'finished', finished_at = NOW()
        WHERE id = ? AND status = 'scoring'`,
       [eventId]
     );
-    return result.affectedRows > 0;
+    if (!result.affectedRows) {
+      return { ok: false, code: 'INVALID_STATUS', message: '仅录分中的杯赛可结束' };
+    }
+    return { ok: true };
   }
 
   static async getRounds(eventId) {
@@ -245,6 +362,38 @@ class EventModel {
     return { ok: true, roundId: result.insertId };
   }
 
+  static buildOccupiedSlotsMap(slots) {
+    const map = new Map();
+    slots.forEach((slot) => {
+      if (!slot.user_id) return;
+      if (!map.has(slot.event_team_id)) map.set(slot.event_team_id, []);
+      map.get(slot.event_team_id).push(slot);
+    });
+    return map;
+  }
+
+  static resolveSlotDisplayName(slot) {
+    return EventModel.resolveSlotRealName(slot) || slot.display_name || slot.username || '—';
+  }
+
+  static async getRoundMemberResults(roundId) {
+    const [rows] = await pool.execute(
+      `SELECT * FROM event_round_member_results WHERE round_id = ? ORDER BY event_team_id ASC, slot_index ASC`,
+      [roundId]
+    );
+    return rows;
+  }
+
+  static async getRoundMemberResultsMap(roundId) {
+    const rows = await EventModel.getRoundMemberResults(roundId);
+    const map = new Map();
+    rows.forEach((row) => {
+      if (!map.has(row.event_team_id)) map.set(row.event_team_id, []);
+      map.get(row.event_team_id).push(row);
+    });
+    return map;
+  }
+
   static async getRoundResults(roundId) {
     const [rows] = await pool.execute(
       `SELECT r.*, t.team_number, t.team_name
@@ -254,7 +403,98 @@ class EventModel {
        ORDER BY r.placement ASC`,
       [roundId]
     );
-    return rows;
+    const memberMap = await EventModel.getRoundMemberResultsMap(roundId);
+    return rows.map((row) => ({
+      ...row,
+      has_member_details: (memberMap.get(row.event_team_id) || []).length > 0,
+    }));
+  }
+
+  static mapPublicMemberResult(row) {
+    return {
+      slotIndex: row.slot_index,
+      role: row.slot_index === 0 ? 'captain' : 'member',
+      displayName: row.display_name,
+      kills: row.kills,
+    };
+  }
+
+  static async getTeamRoundDetails(eventId, teamId) {
+    const data = await EventModel.getTeamWithSlots(eventId, teamId);
+    if (!data) return null;
+    const rounds = await EventModel.getRounds(eventId);
+    const [teamResults] = await pool.execute(
+      `SELECT r.*, er.round_no, er.map_name, er.status AS round_status
+       FROM event_round_results r
+       JOIN event_rounds er ON er.id = r.round_id
+       WHERE r.event_id = ? AND r.event_team_id = ?
+       ORDER BY er.round_no ASC`,
+      [eventId, teamId]
+    );
+    const [memberResults] = await pool.execute(
+      `SELECT * FROM event_round_member_results
+       WHERE event_id = ? AND event_team_id = ?
+       ORDER BY round_id ASC, slot_index ASC`,
+      [eventId, teamId]
+    );
+    const memberByRound = new Map();
+    memberResults.forEach((row) => {
+      if (!memberByRound.has(row.round_id)) memberByRound.set(row.round_id, []);
+      memberByRound.get(row.round_id).push(EventModel.mapPublicMemberResult(row));
+    });
+    const resultByRound = new Map(teamResults.map((row) => [row.round_id, row]));
+    const scoringConfig = await EventModel.getScoringConfigForEvent(eventId);
+
+    const detailRounds = rounds.map((round) => {
+      const result = resultByRound.get(round.id);
+      const members = memberByRound.get(round.id) || [];
+      const memberKillSum = members.length
+        ? members.reduce((sum, member) => sum + Number(member.kills || 0), 0)
+        : null;
+      const resolved = result
+        ? resolveStoredRoundScores(result, scoringConfig, memberKillSum)
+        : null;
+      return {
+        roundId: round.id,
+        roundNo: round.round_no,
+        mapName: round.map_name,
+        status: round.status,
+        placement: resolved?.placement ?? result?.placement ?? null,
+        kills: resolved?.kills ?? result?.kills ?? null,
+        placementPoints: resolved?.placementPoints ?? result?.placement_points ?? null,
+        killPoints: resolved?.killPoints ?? result?.kill_points ?? null,
+        totalPoints: resolved?.totalPoints ?? result?.total_points ?? null,
+        members,
+      };
+    }).filter((round) => round.status === 'completed' || round.placement != null || round.members.length);
+
+    return {
+      team: {
+        id: data.team.id,
+        teamNumber: data.team.team_number,
+        teamName: data.team.team_name,
+      },
+      rounds: detailRounds,
+    };
+  }
+
+  static async getEventRoster(eventId) {
+    const [teams, slots] = await Promise.all([
+      EventModel.getTeams(eventId),
+      EventModel.getSlotsByEvent(eventId),
+    ]);
+    const slotMap = EventModel.buildOccupiedSlotsMap(slots);
+    return teams.map((team) => ({
+      id: team.id,
+      teamNumber: team.team_number,
+      teamName: team.team_name,
+      members: (slotMap.get(team.id) || []).map((slot) => ({
+        slotIndex: slot.slot_index,
+        role: slot.slot_index === 0 ? 'captain' : 'member',
+        displayName: EventModel.resolveSlotDisplayName(slot),
+        userId: slot.user_id,
+      })),
+    }));
   }
 
   static async saveRoundResults({ eventId, roundId, results, updatedBy }) {
@@ -267,13 +507,26 @@ class EventModel {
     if (!round) return { ok: false, code: 'ROUND_NOT_FOUND' };
 
     const teams = await EventModel.getTeams(eventId);
-    const validation = validateRoundResults(results, teams.length);
+    const normalizedResults = results.map(normalizeRoundInput);
+    const validation = validateRoundResults(normalizedResults, teams.length);
     if (!validation.ok) return { ok: false, code: 'VALIDATION', message: validation.message };
 
+    const scoringConfig = await EventModel.getScoringConfigForEvent(eventId);
+    const slots = await EventModel.getSlotsByEvent(eventId);
+    const occupiedByTeam = EventModel.buildOccupiedSlotsMap(slots);
+
     const teamIds = new Set(teams.map((t) => t.id));
-    for (const row of results) {
+    for (const row of normalizedResults) {
       if (!teamIds.has(Number(row.eventTeamId))) {
         return { ok: false, code: 'VALIDATION', message: '队伍 ID 无效' };
+      }
+      const occupied = occupiedByTeam.get(Number(row.eventTeamId)) || [];
+      const memberValidation = validateMemberResults(
+        row.members,
+        occupied.map((slot) => slot.slot_index)
+      );
+      if (!memberValidation.ok) {
+        return { ok: false, code: 'VALIDATION', message: memberValidation.message };
       }
     }
 
@@ -283,10 +536,11 @@ class EventModel {
       if (event.status === 'locked') {
         await conn.execute(`UPDATE events SET status = 'scoring' WHERE id = ?`, [eventId]);
       }
-      for (const row of results) {
+      for (const row of normalizedResults) {
+        const teamId = Number(row.eventTeamId);
         const placement = Number(row.placement);
         const kills = Number(row.kills);
-        const points = calculateTeamPoints(placement, kills, event.scoring_config);
+        const points = calculateTeamPoints(placement, kills, scoringConfig);
         await conn.execute(
           `INSERT INTO event_round_results (
             event_id, round_id, event_team_id, placement, kills,
@@ -302,7 +556,7 @@ class EventModel {
           [
             eventId,
             roundId,
-            Number(row.eventTeamId),
+            teamId,
             placement,
             kills,
             points.placementPoints,
@@ -311,6 +565,37 @@ class EventModel {
             updatedBy,
           ]
         );
+
+        if (row.members.length) {
+          const occupied = occupiedByTeam.get(teamId) || [];
+          const killMap = new Map(
+            row.members.map((member) => [Number(member.slotIndex ?? member.slot_index), Number(member.kills ?? 0)])
+          );
+          await conn.execute(
+            `DELETE FROM event_round_member_results WHERE round_id = ? AND event_team_id = ?`,
+            [roundId, teamId]
+          );
+          for (const slot of occupied) {
+            const memberKills = killMap.has(slot.slot_index)
+              ? killMap.get(slot.slot_index)
+              : 0;
+            await conn.execute(
+              `INSERT INTO event_round_member_results (
+                event_id, round_id, event_team_id, slot_index, user_id, display_name, kills, updated_by
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                eventId,
+                roundId,
+                teamId,
+                slot.slot_index,
+                slot.user_id,
+                EventModel.resolveSlotDisplayName(slot),
+                memberKills,
+                updatedBy,
+              ]
+            );
+          }
+        }
       }
       await conn.commit();
       return { ok: true };
@@ -340,6 +625,62 @@ class EventModel {
     return result.affectedRows > 0 ? { ok: true } : { ok: false, code: 'ROUND_NOT_FOUND' };
   }
 
+  static buildMemberKillLeaderboard(rows) {
+    const map = new Map();
+    rows.forEach((row) => {
+      const key = row.user_id ? `u:${row.user_id}` : `s:${row.event_team_id}:${row.slot_index}`;
+      const kills = Number(row.kills) || 0;
+      const slotLike = {
+        user_real_name: row.real_name,
+        display_name: row.slot_display_name || row.display_name,
+        username: row.username,
+        pubg_player_name: row.slot_pubg_name,
+        user_pubg_player_name: row.user_pubg_name,
+      };
+      if (!map.has(key)) {
+        map.set(key, {
+          userId: row.user_id,
+          teamId: row.event_team_id,
+          teamNumber: row.team_number,
+          teamName: row.team_name,
+          realName: EventModel.resolveSlotRealName(slotLike) || row.display_name || '—',
+          gameId: EventModel.resolveSlotPubgName(slotLike),
+          totalKills: 0,
+        });
+      }
+      map.get(key).totalKills += kills;
+    });
+    const leaderboard = [...map.values()].sort((a, b) => {
+      if (b.totalKills !== a.totalKills) return b.totalKills - a.totalKills;
+      return a.teamNumber - b.teamNumber;
+    });
+    leaderboard.forEach((entry, index) => {
+      entry.rank = index + 1;
+    });
+    return leaderboard;
+  }
+
+  static async getMemberKillLeaderboard(eventId) {
+    const [rows] = await pool.execute(
+      `SELECT m.user_id, m.event_team_id, m.slot_index, m.display_name, m.kills,
+              t.team_number, t.team_name,
+              u.real_name, u.username, u.pubg_player_name AS user_pubg_name,
+              s.pubg_player_name AS slot_pubg_name, s.display_name AS slot_display_name
+       FROM event_round_member_results m
+       INNER JOIN event_rounds r ON r.id = m.round_id AND r.status = 'completed'
+       INNER JOIN event_teams t ON t.id = m.event_team_id
+       LEFT JOIN users u ON u.id = m.user_id
+       LEFT JOIN event_team_slots s
+         ON s.event_id = m.event_id
+        AND s.event_team_id = m.event_team_id
+        AND s.slot_index = m.slot_index
+       WHERE m.event_id = ?
+       ORDER BY m.event_team_id ASC, m.slot_index ASC`,
+      [eventId]
+    );
+    return EventModel.buildMemberKillLeaderboard(rows);
+  }
+
   static async getStandingsData(eventId) {
     const [event, teams, rounds] = await Promise.all([
       EventModel.findById(eventId),
@@ -361,8 +702,157 @@ class EventModel {
       if (!resultsByRound.has(row.round_id)) resultsByRound.set(row.round_id, []);
       resultsByRound.get(row.round_id).push(row);
     });
-    const standings = buildStandings(teams, rounds, resultsByRound);
+    if (roundIds.length) {
+      const [memberRows] = await pool.execute(
+        `SELECT round_id, event_team_id, COUNT(*) AS member_count, SUM(kills) AS kill_sum
+         FROM event_round_member_results
+         WHERE event_id = ?
+         GROUP BY round_id, event_team_id`,
+        [eventId]
+      );
+      const memberCountMap = new Map(
+        memberRows.map((row) => [`${row.round_id}:${row.event_team_id}`, Number(row.member_count)])
+      );
+      const memberKillSumMap = new Map(
+        memberRows.map((row) => [
+          memberKillSumKey(row.round_id, row.event_team_id),
+          Number(row.kill_sum || 0),
+        ])
+      );
+      allResults.forEach((row) => {
+        row.has_member_details = memberCountMap.has(`${row.round_id}:${row.event_team_id}`);
+      });
+      const scoringConfig = await EventModel.getScoringConfigForEvent(eventId);
+      const standings = buildStandings(teams, rounds, resultsByRound, scoringConfig, memberKillSumMap);
+      return { event, teams, rounds, standings };
+    }
+    const scoringConfig = await EventModel.getScoringConfigForEvent(eventId);
+    const standings = buildStandings(teams, rounds, resultsByRound, scoringConfig);
     return { event, teams, rounds, standings };
+  }
+
+  static async buildEventHistorySummary(eventId) {
+    const [rounds, data, leaderboard] = await Promise.all([
+      EventModel.getRounds(eventId),
+      EventModel.getStandingsData(eventId),
+      EventModel.getMemberKillLeaderboard(eventId),
+    ]);
+    const completedRounds = rounds.filter((round) => round.status === 'completed');
+    const champion = data?.standings?.[0];
+    const topKiller = leaderboard?.[0];
+    const [participantRows] = await pool.execute(
+      `SELECT COUNT(DISTINCT user_id) AS cnt
+       FROM event_team_slots
+       WHERE event_id = ? AND user_id IS NOT NULL`,
+      [eventId]
+    );
+    return {
+      totalRounds: completedRounds.length,
+      championTeamName: champion?.teamName || null,
+      championTeamNumber: champion?.teamNumber || null,
+      topKillerName: topKiller?.realName || null,
+      topKillerKills: topKiller?.totalKills || 0,
+      participantCount: Number(participantRows[0]?.cnt || 0),
+    };
+  }
+
+  static async listFinishedEvents() {
+    const [rows] = await pool.execute(
+      `SELECT id, title, finished_at
+       FROM events
+       WHERE status = 'finished'
+       ORDER BY finished_at DESC, id DESC`
+    );
+    const items = await Promise.all(
+      rows.map(async (row) => {
+        const summary = await EventModel.buildEventHistorySummary(row.id);
+        return {
+          id: row.id,
+          title: row.title,
+          finishedAt: row.finished_at,
+          ...summary,
+        };
+      })
+    );
+    return items;
+  }
+
+  static async getEventArchive(eventId) {
+    const event = await EventModel.findById(eventId);
+    if (!event || event.status !== 'finished') return null;
+    const [data, leaderboard, summary, basicInfoRow] = await Promise.all([
+      EventModel.getStandingsData(eventId),
+      EventModel.getMemberKillLeaderboard(eventId),
+      EventModel.buildEventHistorySummary(eventId),
+      EventModel.ensureBasicInfo(eventId),
+    ]);
+    return {
+      event,
+      rounds: data.rounds,
+      standings: data.standings,
+      leaderboard,
+      summary,
+      basicInfo: basicInfoRow,
+    };
+  }
+
+  static async getUserCupHistory(userId) {
+    const [participations] = await pool.execute(
+      `SELECT s.event_id, s.event_team_id, e.title, e.finished_at,
+              t.team_number, t.team_name
+       FROM event_team_slots s
+       INNER JOIN events e ON e.id = s.event_id AND e.status = 'finished'
+       INNER JOIN event_teams t ON t.id = s.event_team_id
+       WHERE s.user_id = ?
+       ORDER BY e.finished_at DESC, e.id DESC`,
+      [userId]
+    );
+    if (!participations.length) {
+      return {
+        summary: { seasonsPlayed: 0, championships: 0, bestRank: null, totalKills: 0 },
+        seasons: [],
+      };
+    }
+    const seasons = [];
+    let championships = 0;
+    let bestRank = null;
+    let totalKills = 0;
+    for (const row of participations) {
+      const data = await EventModel.getStandingsData(row.event_id);
+      const teamStanding = (data?.standings || []).find((item) => item.teamId === row.event_team_id);
+      const rank = teamStanding?.rank ?? null;
+      if (rank === 1) championships += 1;
+      if (rank != null && (bestRank == null || rank < bestRank)) bestRank = rank;
+      const [killRows] = await pool.execute(
+        `SELECT COALESCE(SUM(m.kills), 0) AS total
+         FROM event_round_member_results m
+         INNER JOIN event_rounds r ON r.id = m.round_id AND r.status = 'completed'
+         WHERE m.event_id = ? AND m.user_id = ?`,
+        [row.event_id, userId]
+      );
+      const kills = Number(killRows[0]?.total || 0);
+      totalKills += kills;
+      seasons.push({
+        eventId: row.event_id,
+        title: row.title,
+        finishedAt: row.finished_at,
+        teamNumber: row.team_number,
+        teamName: row.team_name,
+        teamRank: rank,
+        totalKills: kills,
+        teamTotalPoints: teamStanding?.totalPoints ?? 0,
+        isChampion: rank === 1,
+      });
+    }
+    return {
+      summary: {
+        seasonsPlayed: seasons.length,
+        championships,
+        bestRank,
+        totalKills,
+      },
+      seasons,
+    };
   }
 
   static async getTeams(eventId) {

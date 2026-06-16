@@ -29,6 +29,7 @@ router.put('/dark-mode', verifyToken, verifyUser, UserController.updateDarkMode)
 
 // 获取用户统计信息（需要认证）
 router.get('/stats', verifyToken, verifyUser, UserController.getUserStats);
+router.get('/cup-history', verifyToken, verifyUser, UserController.getCupHistory);
 
 // 获取用户帖子（需要认证）
 router.get('/posts', verifyToken, verifyUser, UserController.getUserPosts);

@@ -3,6 +3,13 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Delete, Edit, Plus } from '@element-plus/icons-vue'
 import { adminApi, authApi } from '../../services/api'
+import {
+  createDefaultPlacementRows,
+  DEFAULT_BASIC_INFO_CONTENT,
+  DEFAULT_PLACEMENT_POINTS,
+  placementMapToRows,
+  placementRowsToMap,
+} from '../../utils/eventScoring'
 
 const getRole = () => {
   try {
@@ -40,11 +47,19 @@ const dialogVisible = ref(false)
 const eventForm = reactive({
   id: null,
   title: '',
-  description: '',
+  status: 'draft',
   registration_open_at: '',
   registration_close_at: '',
   require_pubg_binding: true,
 })
+
+const basicInfoForm = reactive({
+  content: DEFAULT_BASIC_INFO_CONTENT,
+  pointsPerKill: 1,
+  placementRows: createDefaultPlacementRows(),
+})
+
+const basicInfoEditable = computed(() => ['draft', 'registration'].includes(eventForm.status))
 
 const carouselForm = reactive({
   id: null,
@@ -83,15 +98,50 @@ const pickFirstUsableInviteCode = () => {
   return list.length ? list[0].code : ''
 }
 
+const resetBasicInfoForm = () => {
+  Object.assign(basicInfoForm, {
+    content: DEFAULT_BASIC_INFO_CONTENT,
+    pointsPerKill: 1,
+    placementRows: createDefaultPlacementRows(),
+  })
+}
+
+const applyBasicInfoToForm = (basicInfo) => {
+  if (!basicInfo) {
+    resetBasicInfoForm()
+    return
+  }
+  Object.assign(basicInfoForm, {
+    content: basicInfo.content || DEFAULT_BASIC_INFO_CONTENT,
+    pointsPerKill: Number(basicInfo.pointsPerKill ?? 1),
+    placementRows: placementMapToRows(basicInfo.placementPoints),
+  })
+}
+
+const restoreDefaultBasicInfo = () => {
+  Object.assign(basicInfoForm, {
+    content: DEFAULT_BASIC_INFO_CONTENT,
+    pointsPerKill: 1,
+    placementRows: createDefaultPlacementRows(),
+  })
+}
+
+const buildBasicInfoPayload = () => ({
+  content: basicInfoForm.content,
+  pointsPerKill: Number(basicInfoForm.pointsPerKill) || 0,
+  placementPoints: placementRowsToMap(basicInfoForm.placementRows),
+})
+
 const resetEventForm = () => {
   Object.assign(eventForm, {
     id: null,
     title: '',
-    description: '',
+    status: 'draft',
     registration_open_at: '',
     registration_close_at: '',
     require_pubg_binding: true,
   })
+  resetBasicInfoForm()
 }
 
 const resetCarouselForm = () => {
@@ -134,17 +184,29 @@ const openCreateDialog = (type) => {
   dialogVisible.value = true
 }
 
-const openEditDialog = (type, row) => {
+const openEditDialog = async (type, row) => {
   dialogType.value = type
   if (type === 'event') {
     Object.assign(eventForm, {
       id: row.id,
       title: row.title,
-      description: row.description || '',
+      status: row.status,
       registration_open_at: row.registrationOpenAt || row.registration_open_at || '',
       registration_close_at: row.registrationCloseAt || row.registration_close_at || '',
       require_pubg_binding: row.requirePubgBinding ?? row.require_pubg_binding ?? true,
     })
+    if (row.basicInfo) {
+      applyBasicInfoToForm(row.basicInfo)
+    } else if (row.id) {
+      try {
+        const data = await adminApi.events.getBasicInfo(row.id)
+        applyBasicInfoToForm(data.basicInfo)
+      } catch {
+        resetBasicInfoForm()
+      }
+    } else {
+      resetBasicInfoForm()
+    }
   }
   if (type === 'carousel') Object.assign(carouselForm, row)
   if (type === 'user') Object.assign(userForm, { ...row, password: '' })
@@ -235,13 +297,20 @@ const submitDialog = async () => {
     if (dialogType.value === 'event') {
       const payload = {
         title: eventForm.title,
-        description: eventForm.description,
         registration_open_at: eventForm.registration_open_at || null,
         registration_close_at: eventForm.registration_close_at || null,
         require_pubg_binding: eventForm.require_pubg_binding,
       }
-      if (eventForm.id) await adminApi.events.update(eventForm.id, payload)
-      else await adminApi.events.create(payload)
+      let eventId = eventForm.id
+      if (eventId) {
+        await adminApi.events.update(eventId, payload)
+      } else {
+        const created = await adminApi.events.create(payload)
+        eventId = created?.event?.id
+      }
+      if (eventId && basicInfoEditable.value) {
+        await adminApi.events.updateBasicInfo(eventId, buildBasicInfoPayload())
+      }
       await loadEvents()
     }
 
@@ -353,21 +422,65 @@ const scoringLoading = ref(false)
 const scoringEvent = ref(null)
 const scoringRounds = ref([])
 const scoringTeams = ref([])
+const scoringRoster = ref([])
 const selectedRoundId = ref(null)
 const scoreRows = ref([])
 const newRoundMap = ref('')
+
+const pointsPerKill = computed(() => Number(scoringEvent.value?.basicInfo?.pointsPerKill ?? 1))
+
+const placementPointsMap = computed(() => (
+  scoringEvent.value?.basicInfo?.placementPoints || DEFAULT_PLACEMENT_POINTS
+))
+
+const rosterMembersForTeam = (teamId) => (
+  scoringRoster.value.find((team) => team.id === teamId)?.members || []
+)
+
+const previewTeamPoints = (row) => {
+  const placement = Number(row.placement)
+  if (!Number.isInteger(placement) || placement < 1) return null
+  const placementPoints = placementPointsMap.value[placement] ?? 0
+  const kills = row.members?.length
+    ? row.members.reduce((sum, member) => sum + (Number(member.kills) || 0), 0)
+    : Number(row.kills) || 0
+  const killPoints = kills * pointsPerKill.value
+  return {
+    placementPoints,
+    killPoints,
+    totalPoints: placementPoints + killPoints,
+    kills,
+  }
+}
+
+const syncTeamKills = (row) => {
+  const preview = previewTeamPoints(row)
+  if (!preview) return
+  row.kills = preview.kills
+}
 
 const buildScoreRows = (results = []) => {
   const resultMap = new Map(results.map((r) => [r.teamId, r]))
   return scoringTeams.value.map((team) => {
     const existing = resultMap.get(team.id)
-    return {
+    const rosterMembers = rosterMembersForTeam(team.id)
+    const memberMap = new Map((existing?.members || []).map((member) => [member.slotIndex, member.kills]))
+    const members = rosterMembers.map((member) => ({
+      slotIndex: member.slotIndex,
+      displayName: member.displayName,
+      role: member.role,
+      kills: memberMap.get(member.slotIndex) ?? 0,
+    }))
+    const row = {
       eventTeamId: team.id,
       teamNumber: team.teamNumber,
       teamName: team.teamName,
       placement: existing?.placement ?? '',
       kills: existing?.kills ?? 0,
+      members,
     }
+    if (members.length) syncTeamKills(row)
+    return row
   })
 }
 
@@ -378,8 +491,13 @@ const loadScoringData = async () => {
     const data = await adminApi.events.getRounds(scoringEvent.value.id)
     scoringRounds.value = data.rounds || []
     scoringTeams.value = data.teams || []
+    scoringRoster.value = data.roster || []
     if (scoringEvent.value) {
-      scoringEvent.value = { ...scoringEvent.value, status: data.event?.status || scoringEvent.value.status }
+      scoringEvent.value = {
+        ...scoringEvent.value,
+        status: data.event?.status || scoringEvent.value.status,
+        basicInfo: data.event?.basicInfo || scoringEvent.value.basicInfo,
+      }
     }
   } catch (e) {
     ElMessage.error(e?.message || '加载局次失败')
@@ -475,11 +593,21 @@ const selectRound = async (round) => {
 
 const saveRoundScores = async () => {
   if (!selectedRoundId.value) return
-  const results = scoreRows.value.map((row) => ({
-    eventTeamId: row.eventTeamId,
-    placement: Number(row.placement),
-    kills: Number(row.kills) || 0,
-  }))
+  const results = scoreRows.value.map((row) => {
+    const members = (row.members || []).map((member) => ({
+      slotIndex: member.slotIndex,
+      kills: Number(member.kills) || 0,
+    }))
+    const kills = members.length
+      ? members.reduce((sum, member) => sum + member.kills, 0)
+      : Number(row.kills) || 0
+    return {
+      eventTeamId: row.eventTeamId,
+      placement: Number(row.placement),
+      kills,
+      members,
+    }
+  })
   try {
     scoringLoading.value = true
     await adminApi.events.saveRoundResults(scoringEvent.value.id, selectedRoundId.value, results)
@@ -619,7 +747,7 @@ watch(activeTab, async (tab) => {
           <el-table-column label="操作" width="360" fixed="right">
             <template #default="scope">
               <el-button
-                v-if="scope.row.status === 'draft'"
+                v-if="scope.row.status === 'draft' || scope.row.status === 'registration'"
                 type="primary"
                 size="small"
                 @click="openEditDialog('event', scope.row)"
@@ -748,17 +876,82 @@ watch(activeTab, async (tab) => {
 
         <el-dialog
           v-model="dialogVisible"
-          class="admin-dialog"
+          class="admin-dialog event-dialog"
           :title="dialogType === 'event' ? '杯赛' : dialogType === 'carousel' ? '轮播' : dialogType === 'invite' ? '邀请码' : '用户'"
-          width="560px"
+          :width="dialogType === 'event' ? 'min(760px, 96vw)' : '560px'"
           align-center
         >
-        <div v-if="dialogType === 'event'" class="form-grid">
-          <el-input v-model="eventForm.title" placeholder="杯赛名称" />
-          <el-input v-model="eventForm.description" type="textarea" :rows="3" placeholder="简介（可选）" />
-          <el-input v-model="eventForm.registration_open_at" placeholder="报名开始（ISO 或 YYYY-MM-DD HH:mm:ss，可留空）" />
-          <el-input v-model="eventForm.registration_close_at" placeholder="报名截止（可留空）" />
-          <el-switch v-model="eventForm.require_pubg_binding" active-text="需绑定 PUBG" inactive-text="无需绑定" />
+        <div v-if="dialogType === 'event'" class="form-grid event-form-grid">
+          <el-input v-model="eventForm.title" placeholder="杯赛名称" :disabled="!basicInfoEditable" />
+          <el-input
+            v-model="eventForm.registration_open_at"
+            placeholder="报名开始（ISO 或 YYYY-MM-DD HH:mm:ss，可留空）"
+            :disabled="!basicInfoEditable"
+          />
+          <el-input
+            v-model="eventForm.registration_close_at"
+            placeholder="报名截止（可留空）"
+            :disabled="!basicInfoEditable"
+          />
+          <el-switch
+            v-model="eventForm.require_pubg_binding"
+            active-text="需绑定 PUBG"
+            inactive-text="无需绑定"
+            :disabled="!basicInfoEditable"
+          />
+
+          <div class="basic-info-panel">
+            <div class="basic-info-head">
+              <span class="section-label">基础信息（含 PGS 赛事规则）</span>
+              <el-button
+                v-if="basicInfoEditable"
+                size="small"
+                plain
+                @click="restoreDefaultBasicInfo"
+              >
+                恢复 PGS 默认
+              </el-button>
+            </div>
+            <p v-if="!basicInfoEditable" class="basic-info-lock-hint">名单已锁定，基础信息不可修改</p>
+            <el-input
+              v-model="basicInfoForm.content"
+              type="textarea"
+              :rows="8"
+              placeholder="赛事说明、赛制、报名规则等"
+              :disabled="!basicInfoEditable"
+            />
+
+            <div class="placement-editor">
+              <div class="placement-editor-head">
+                <span>PGS 排名分（1–16 名）</span>
+                <span class="placement-kill-label">每击杀得分</span>
+                <el-input-number
+                  v-model="basicInfoForm.pointsPerKill"
+                  class="placement-kill-input"
+                  :min="0"
+                  :max="100"
+                  controls-position="right"
+                  :disabled="!basicInfoEditable"
+                />
+              </div>
+              <div class="placement-grid">
+                <div
+                  v-for="row in basicInfoForm.placementRows"
+                  :key="row.rank"
+                  class="placement-grid-item"
+                >
+                  <span class="placement-rank">#{{ row.rank }}</span>
+                  <el-input-number
+                    v-model="row.points"
+                    :min="0"
+                    :max="100"
+                    controls-position="right"
+                    :disabled="!basicInfoEditable"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div v-else-if="dialogType === 'carousel'" class="form-grid">
@@ -861,12 +1054,35 @@ watch(activeTab, async (tab) => {
 
               <div class="score-panel">
                 <template v-if="selectedRoundId">
-                  <p class="section-label">录入 16 队名次与击杀（名次 1–16 不可重复）</p>
+                  <p class="section-label">录入 16 队名次；展开行可录成员击杀（队伍击杀自动汇总）</p>
                   <div class="score-table-wrap">
                     <el-table :data="scoreRows" border size="small" class="score-table">
+                      <el-table-column type="expand" width="42">
+                        <template #default="scope">
+                          <div class="member-score-panel">
+                            <p v-if="!scope.row.members.length" class="member-score-empty">该队暂无占槽成员</p>
+                            <div
+                              v-for="member in scope.row.members"
+                              :key="member.slotIndex"
+                              class="member-score-row"
+                            >
+                              <span class="member-score-name">
+                                {{ member.displayName }}
+                                <em v-if="member.role === 'captain'">队长</em>
+                              </span>
+                              <el-input-number
+                                v-model="member.kills"
+                                :min="0"
+                                controls-position="right"
+                                @change="syncTeamKills(scope.row)"
+                              />
+                            </div>
+                          </div>
+                        </template>
+                      </el-table-column>
                       <el-table-column prop="teamNumber" label="#" width="56" align="center" />
-                      <el-table-column prop="teamName" label="队伍" min-width="140" show-overflow-tooltip />
-                      <el-table-column label="名次" width="148" align="center">
+                      <el-table-column prop="teamName" label="队伍" min-width="120" show-overflow-tooltip />
+                      <el-table-column label="名次" width="120" align="center">
                         <template #default="scope">
                           <el-input-number
                             v-model="scope.row.placement"
@@ -877,14 +1093,26 @@ watch(activeTab, async (tab) => {
                           />
                         </template>
                       </el-table-column>
-                      <el-table-column label="击杀" width="148" align="center">
+                      <el-table-column label="排名分" width="78" align="center">
                         <template #default="scope">
+                          {{ previewTeamPoints(scope.row)?.placementPoints ?? '—' }}
+                        </template>
+                      </el-table-column>
+                      <el-table-column label="击杀" width="78" align="center">
+                        <template #default="scope">
+                          <span v-if="scope.row.members.length">{{ previewTeamPoints(scope.row)?.kills ?? 0 }}</span>
                           <el-input-number
+                            v-else
                             v-model="scope.row.kills"
                             class="score-input"
                             :min="0"
                             controls-position="right"
                           />
+                        </template>
+                      </el-table-column>
+                      <el-table-column label="总分" width="78" align="center">
+                        <template #default="scope">
+                          {{ previewTeamPoints(scope.row)?.totalPoints ?? '—' }}
                         </template>
                       </el-table-column>
                     </el-table>
@@ -1028,6 +1256,78 @@ watch(activeTab, async (tab) => {
   gap: 10px;
 }
 
+.event-form-grid {
+  gap: 12px;
+}
+
+.basic-info-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid #e5e5ea;
+}
+
+.basic-info-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.basic-info-lock-hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #e68619;
+}
+
+.placement-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.placement-editor-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  color: #424245;
+}
+
+.placement-kill-label {
+  margin-left: auto;
+}
+
+.placement-kill-input {
+  width: 120px;
+}
+
+.placement-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.placement-grid-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.placement-rank {
+  width: 2rem;
+  flex-shrink: 0;
+  font-size: 0.8rem;
+  color: #86868b;
+  text-align: right;
+}
+
+.placement-grid-item :deep(.el-input-number) {
+  width: 100%;
+}
+
 .admin-table :deep(.el-table__header th.el-table__cell) {
   background: #f9f9f9 !important;
   color: #1d1d1f;
@@ -1156,6 +1456,40 @@ watch(activeTab, async (tab) => {
 .score-table :deep(.el-input-number .el-input__wrapper) {
   padding-left: 8px;
   padding-right: 32px;
+}
+
+.score-table-wrap {
+  overflow: auto;
+}
+
+.member-score-panel {
+  padding: 0.35rem 0.5rem 0.5rem;
+}
+
+.member-score-empty {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #86868b;
+}
+
+.member-score-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.35rem 0;
+}
+
+.member-score-name {
+  font-size: 0.82rem;
+  color: #1d1d1f;
+}
+
+.member-score-name em {
+  margin-left: 0.35rem;
+  font-style: normal;
+  font-size: 0.72rem;
+  color: #0071e3;
 }
 
 .score-actions {

@@ -1,5 +1,13 @@
 const EventModel = require('../models/eventModel');
 const UserModel = require('../models/userModel');
+const {
+  buildPlacementTable,
+  getDefaultBasicInfoContent,
+  getDefaultScoringConfig,
+} = require('../services/eventScoring');
+
+const EDITABLE_EVENT_STATUSES = ['draft', 'registration'];
+const EDITABLE_BASIC_INFO_STATUSES = ['draft', 'registration'];
 
 const STATUS_LABELS = {
   draft: '筹备中',
@@ -19,6 +27,53 @@ class EventController {
   /** @deprecated use resolveRealName */
   static resolveDisplayName(user) {
     return EventController.resolveRealName(user);
+  }
+
+  static toPublicBasicInfo(row) {
+    if (!row) {
+      const defaults = getDefaultScoringConfig();
+      return {
+        content: getDefaultBasicInfoContent(),
+        pointsPerKill: defaults.pointsPerKill,
+        placementTable: buildPlacementTable(defaults.placementPoints),
+      };
+    }
+    return {
+      content: row.content || '',
+      pointsPerKill: Number(row.points_per_kill ?? 1),
+      placementTable: buildPlacementTable(row.placement_points),
+    };
+  }
+
+  static toAdminBasicInfo(row) {
+    if (!row) {
+      const defaults = getDefaultScoringConfig();
+      return {
+        content: getDefaultBasicInfoContent(),
+        pointsPerKill: defaults.pointsPerKill,
+        placementPoints: { ...defaults.placementPoints },
+      };
+    }
+    const placementPoints = row.placement_points || getDefaultScoringConfig().placementPoints;
+    return {
+      content: row.content || '',
+      pointsPerKill: Number(row.points_per_kill ?? 1),
+      placementPoints: Object.fromEntries(
+        Array.from({ length: 16 }, (_, index) => {
+          const rank = index + 1;
+          return [rank, Number(placementPoints[rank] ?? placementPoints[String(rank)] ?? 0)];
+        })
+      ),
+    };
+  }
+
+  static async withBasicInfo(event) {
+    if (!event) return null;
+    const basicInfoRow = await EventModel.ensureBasicInfo(event.id);
+    return {
+      ...EventController.toPublicEvent(event),
+      basicInfo: EventController.toPublicBasicInfo(basicInfoRow),
+    };
   }
 
   static toPublicEvent(event) {
@@ -60,7 +115,7 @@ class EventController {
       }
       const mySlot = await EventModel.getUserSlot(event.id, req.user.id);
       res.json({
-        event: EventController.toPublicEvent(event),
+        event: await EventController.withBasicInfo(event),
         mySlot: mySlot
           ? {
               teamId: mySlot.event_team_id,
@@ -89,7 +144,7 @@ class EventController {
       ]);
       const mySlot = await EventModel.getUserSlot(event.id, req.user.id);
       res.json({
-        event: EventController.toPublicEvent(event),
+        event: await EventController.withBasicInfo(event),
         teams: EventModel.buildLobby(teams, slots),
         mySlot: mySlot
           ? {
@@ -118,7 +173,7 @@ class EventController {
         return res.status(404).json({ error: '队伍不存在' });
       }
       res.json({
-        event: EventController.toPublicEvent(event),
+        event: await EventController.withBasicInfo(event),
         team: data.team,
         slots: data.slots.map((s) => {
           const realName = EventModel.resolveSlotRealName(s);
@@ -215,7 +270,17 @@ class EventController {
   static async listAll(req, res) {
     try {
       const events = await EventModel.listAll();
-      res.json(events.map(EventController.toPublicEvent));
+      const rows = await Promise.all(
+        events.map(async (event) => {
+          const basicInfoRow = await EventModel.ensureBasicInfo(event.id);
+          return {
+            ...EventController.toPublicEvent(event),
+            basicInfo: EventController.toAdminBasicInfo(basicInfoRow),
+            basicInfoEditable: EDITABLE_BASIC_INFO_STATUSES.includes(event.status),
+          };
+        })
+      );
+      res.json(rows);
     } catch (error) {
       console.error('获取杯赛列表失败:', error);
       res.status(500).json({ error: '获取杯赛列表失败' });
@@ -237,7 +302,10 @@ class EventController {
         created_by: req.user.id,
       });
       const event = await EventModel.findById(id);
-      res.status(201).json({ message: '杯赛已创建', event: EventController.toPublicEvent(event) });
+      res.status(201).json({
+        message: '杯赛已创建',
+        event: await EventController.withBasicInfo(event),
+      });
     } catch (error) {
       console.error('创建杯赛失败:', error);
       res.status(500).json({ error: '创建杯赛失败' });
@@ -251,8 +319,8 @@ class EventController {
       if (!event) {
         return res.status(404).json({ error: '杯赛不存在' });
       }
-      if (event.status !== 'draft') {
-        return res.status(400).json({ error: '仅筹备中的杯赛可编辑' });
+      if (!EDITABLE_EVENT_STATUSES.includes(event.status)) {
+        return res.status(400).json({ error: '仅筹备中或报名中的杯赛可编辑' });
       }
       await EventModel.update(id, {
         title: req.body?.title,
@@ -262,10 +330,62 @@ class EventController {
         require_pubg_binding: req.body?.require_pubg_binding,
       });
       const updated = await EventModel.findById(id);
-      res.json({ message: '更新成功', event: EventController.toPublicEvent(updated) });
+      res.json({
+        message: '更新成功',
+        event: await EventController.withBasicInfo(updated),
+      });
     } catch (error) {
       console.error('更新杯赛失败:', error);
       res.status(500).json({ error: '更新杯赛失败' });
+    }
+  }
+
+  static async getBasicInfo(req, res) {
+    try {
+      const id = Number(req.params.id);
+      const event = await EventModel.findById(id);
+      if (!event) return res.status(404).json({ error: '杯赛不存在' });
+      const basicInfoRow = await EventModel.ensureBasicInfo(id);
+      res.json({
+        eventId: id,
+        status: event.status,
+        editable: EDITABLE_BASIC_INFO_STATUSES.includes(event.status),
+        basicInfo: EventController.toAdminBasicInfo(basicInfoRow),
+      });
+    } catch (error) {
+      console.error('获取杯赛基础信息失败:', error);
+      res.status(500).json({ error: '获取杯赛基础信息失败' });
+    }
+  }
+
+  static async updateBasicInfo(req, res) {
+    try {
+      const id = Number(req.params.id);
+      const event = await EventModel.findById(id);
+      if (!event) return res.status(404).json({ error: '杯赛不存在' });
+      if (!EDITABLE_BASIC_INFO_STATUSES.includes(event.status)) {
+        return res.status(400).json({ error: '名单锁定后不可修改基础信息' });
+      }
+      const body = req.body || {};
+      const result = await EventModel.upsertBasicInfo(
+        id,
+        {
+          content: body.content,
+          placementPoints: body.placementPoints ?? body.placement_points,
+          pointsPerKill: body.pointsPerKill ?? body.points_per_kill,
+        },
+        req.user.id
+      );
+      if (!result.ok) {
+        return res.status(400).json({ error: result.message || '保存失败' });
+      }
+      res.json({
+        message: '基础信息已保存',
+        basicInfo: EventController.toAdminBasicInfo(result.basicInfo),
+      });
+    } catch (error) {
+      console.error('更新杯赛基础信息失败:', error);
+      res.status(500).json({ error: '更新杯赛基础信息失败' });
     }
   }
 
@@ -328,7 +448,7 @@ class EventController {
     };
   }
 
-  static toPublicResult(row) {
+  static toPublicResult(row, members = []) {
     return {
       teamId: row.event_team_id,
       teamNumber: row.team_number,
@@ -338,7 +458,45 @@ class EventController {
       placementPoints: row.placement_points,
       killPoints: row.kill_points,
       totalPoints: row.total_points,
+      hasMemberDetails: Boolean(row.has_member_details),
+      members: members.map((member) => EventModel.mapPublicMemberResult(member)),
     };
+  }
+
+  static async getCurrentTeamRoundDetails(req, res) {
+    try {
+      const event = await EventModel.getCurrentForUser();
+      if (!event) {
+        return res.status(404).json({ error: '暂无杯赛' });
+      }
+      const teamId = Number(req.params.teamId);
+      const data = await EventModel.getTeamRoundDetails(event.id, teamId);
+      if (!data) {
+        return res.status(404).json({ error: '队伍不存在' });
+      }
+      res.json({
+        event: await EventController.withBasicInfo(event),
+        ...data,
+      });
+    } catch (error) {
+      console.error('获取队伍局次详情失败:', error);
+      res.status(500).json({ error: '获取队伍局次详情失败' });
+    }
+  }
+
+  static async getEventTeamRoundDetails(req, res) {
+    try {
+      const eventId = Number(req.params.id);
+      const teamId = Number(req.params.teamId);
+      const event = await EventModel.findById(eventId);
+      if (!event) return res.status(404).json({ error: '杯赛不存在' });
+      const data = await EventModel.getTeamRoundDetails(eventId, teamId);
+      if (!data) return res.status(404).json({ error: '队伍不存在' });
+      res.json(data);
+    } catch (error) {
+      console.error('获取队伍局次详情失败:', error);
+      res.status(500).json({ error: '获取队伍局次详情失败' });
+    }
   }
 
   static async getCurrentRounds(req, res) {
@@ -349,7 +507,7 @@ class EventController {
       }
       const rounds = await EventModel.getRounds(event.id);
       res.json({
-        event: EventController.toPublicEvent(event),
+        event: await EventController.withBasicInfo(event),
         rounds: rounds.map(EventController.toPublicRound),
       });
     } catch (error) {
@@ -366,13 +524,89 @@ class EventController {
       }
       const data = await EventModel.getStandingsData(event.id);
       res.json({
-        event: EventController.toPublicEvent(data.event),
+        event: await EventController.withBasicInfo(data.event),
         rounds: data.rounds.map(EventController.toPublicRound),
         standings: data.standings,
       });
     } catch (error) {
       console.error('获取积分榜失败:', error);
       res.status(500).json({ error: '获取积分榜失败' });
+    }
+  }
+
+  static async getCurrentMemberKillLeaderboard(req, res) {
+    try {
+      const event = await EventModel.getCurrentForUser();
+      if (!event) {
+        return res.json({ event: null, leaderboard: [] });
+      }
+      const leaderboard = await EventModel.getMemberKillLeaderboard(event.id);
+      res.json({
+        event: await EventController.withBasicInfo(event),
+        leaderboard,
+      });
+    } catch (error) {
+      console.error('获取个人击杀榜失败:', error);
+      res.status(500).json({ error: '获取个人击杀榜失败' });
+    }
+  }
+
+  static async listHistory(req, res) {
+    try {
+      const items = await EventModel.listFinishedEvents();
+      res.json({ items });
+    } catch (error) {
+      console.error('获取历史赛季列表失败:', error);
+      res.status(500).json({ error: '获取历史赛季列表失败' });
+    }
+  }
+
+  static async getHistoryArchive(req, res) {
+    try {
+      const eventId = Number(req.params.id);
+      const archive = await EventModel.getEventArchive(eventId);
+      if (!archive) {
+        return res.status(404).json({ error: '赛季不存在或未结束' });
+      }
+      res.json({
+        event: {
+          ...EventController.toPublicEvent(archive.event),
+          basicInfo: EventController.toPublicBasicInfo(archive.basicInfo),
+        },
+        rounds: archive.rounds.map(EventController.toPublicRound),
+        standings: archive.standings,
+        leaderboard: archive.leaderboard,
+        summary: archive.summary,
+      });
+    } catch (error) {
+      console.error('获取历史赛季详情失败:', error);
+      res.status(500).json({ error: '获取历史赛季详情失败' });
+    }
+  }
+
+  static async getHistoryTeamRoundDetails(req, res) {
+    try {
+      const eventId = Number(req.params.id);
+      const event = await EventModel.findById(eventId);
+      if (!event || event.status !== 'finished') {
+        return res.status(404).json({ error: '赛季不存在或未结束' });
+      }
+      const teamId = Number(req.params.teamId);
+      const data = await EventModel.getTeamRoundDetails(eventId, teamId);
+      if (!data) {
+        return res.status(404).json({ error: '队伍不存在' });
+      }
+      res.json({
+        team: {
+          id: data.team.id,
+          teamNumber: data.team.team_number,
+          teamName: data.team.team_name,
+        },
+        rounds: data.rounds,
+      });
+    } catch (error) {
+      console.error('获取历史队伍详情失败:', error);
+      res.status(500).json({ error: '获取历史队伍详情失败' });
     }
   }
 
@@ -388,10 +622,14 @@ class EventController {
         return res.status(404).json({ error: '局次不存在' });
       }
       const results = await EventModel.getRoundResults(roundId);
+      const memberMap = await EventModel.getRoundMemberResultsMap(roundId);
       res.json({
-        event: EventController.toPublicEvent(event),
+        event: await EventController.withBasicInfo(event),
         round: EventController.toPublicRound(round),
-        results: results.map(EventController.toPublicResult),
+        results: results.map((row) => EventController.toPublicResult(
+          row,
+          memberMap.get(row.event_team_id) || []
+        )),
       });
     } catch (error) {
       console.error('获取局次成绩失败:', error);
@@ -417,9 +655,10 @@ class EventController {
   static async finish(req, res) {
     try {
       const id = Number(req.params.id);
-      const ok = await EventModel.finish(id);
-      if (!ok) {
-        return res.status(400).json({ error: '仅录分中的杯赛可结束' });
+      const result = await EventModel.finish(id);
+      if (!result.ok) {
+        const status = result.code === 'NOT_FOUND' ? 404 : 400;
+        return res.status(status).json({ error: result.message || '结束杯赛失败' });
       }
       const event = await EventModel.findById(id);
       res.json({ message: '杯赛已结束', event: EventController.toPublicEvent(event) });
@@ -462,18 +701,20 @@ class EventController {
       const eventId = Number(req.params.id);
       const event = await EventModel.findById(eventId);
       if (!event) return res.status(404).json({ error: '杯赛不存在' });
-      const [rounds, teams] = await Promise.all([
+      const [rounds, teams, roster] = await Promise.all([
         EventModel.getRounds(eventId),
         EventModel.getTeams(eventId),
+        EventModel.getEventRoster(eventId),
       ]);
       res.json({
-        event: EventController.toPublicEvent(event),
+        event: await EventController.withBasicInfo(event),
         rounds: rounds.map(EventController.toPublicRound),
         teams: teams.map((t) => ({
           id: t.id,
           teamNumber: t.team_number,
           teamName: t.team_name,
         })),
+        roster,
       });
     } catch (error) {
       console.error('获取局次失败:', error);
@@ -490,6 +731,12 @@ class EventController {
         eventTeamId: row.eventTeamId ?? row.event_team_id,
         placement: row.placement,
         kills: row.kills ?? 0,
+        members: Array.isArray(row.members)
+          ? row.members.map((member) => ({
+            slotIndex: member.slotIndex ?? member.slot_index,
+            kills: member.kills ?? 0,
+          }))
+          : [],
       }));
       const result = await EventModel.saveRoundResults({
         eventId,
@@ -505,9 +752,13 @@ class EventController {
         return res.status(400).json({ error: '保存失败' });
       }
       const saved = await EventModel.getRoundResults(roundId);
+      const memberMap = await EventModel.getRoundMemberResultsMap(roundId);
       res.json({
         message: '成绩已保存',
-        results: saved.map(EventController.toPublicResult),
+        results: saved.map((row) => EventController.toPublicResult(
+          row,
+          memberMap.get(row.event_team_id) || []
+        )),
       });
     } catch (error) {
       console.error('保存局次成绩失败:', error);
@@ -539,7 +790,7 @@ class EventController {
       const data = await EventModel.getStandingsData(eventId);
       if (!data) return res.status(404).json({ error: '杯赛不存在' });
       res.json({
-        event: EventController.toPublicEvent(data.event),
+        event: await EventController.withBasicInfo(data.event),
         rounds: data.rounds.map(EventController.toPublicRound),
         standings: data.standings,
       });
@@ -556,9 +807,13 @@ class EventController {
       const round = await EventModel.getRoundById(roundId, eventId);
       if (!round) return res.status(404).json({ error: '局次不存在' });
       const results = await EventModel.getRoundResults(roundId);
+      const memberMap = await EventModel.getRoundMemberResultsMap(roundId);
       res.json({
         round: EventController.toPublicRound(round),
-        results: results.map(EventController.toPublicResult),
+        results: results.map((row) => EventController.toPublicResult(
+          row,
+          memberMap.get(row.event_team_id) || []
+        )),
       });
     } catch (error) {
       console.error('获取局次成绩失败:', error);

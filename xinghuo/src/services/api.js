@@ -324,6 +324,14 @@ export const eventApi = {
   getLobby: async () => request('/events/current/lobby', { skipCache: true }),
   getRounds: async () => request('/events/current/rounds', { skipCache: true }),
   getStandings: async () => request('/events/current/standings', { skipCache: true }),
+  getMemberKillLeaderboard: async () => request('/events/current/member-kills', { skipCache: true }),
+  getHistoryList: async () => request('/events/history', { skipCache: true }),
+  getHistoryArchive: async (eventId) => request(`/events/history/${eventId}`, { skipCache: true }),
+  getHistoryTeamRoundDetails: async (eventId, teamId) => request(
+    `/events/history/${eventId}/teams/${teamId}/round-details`,
+    { skipCache: true }
+  ),
+  getTeamRoundDetails: async (teamId) => request(`/events/current/teams/${teamId}/round-details`, { skipCache: true }),
   getRoundResults: async (roundId) => request(`/events/current/rounds/${roundId}/results`, { skipCache: true }),
   joinSlot: async (teamId, slotIndex) => {
     const data = await request(`/events/current/teams/${teamId}/slots/${slotIndex}/join`, {
@@ -358,6 +366,8 @@ export const userApi = {
     // 实际 API 调用
     return request('/user/stats');
   },
+
+  getCupHistory: async () => request('/user/cup-history', { skipCache: true }),
   
   // 获取用户帖子（Profile.vue 使用）
   getUserPosts: async () => {
@@ -556,6 +566,11 @@ export const adminApi = {
       body: JSON.stringify(payload),
     }),
     update: async (id, payload) => request(`/events/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+    getBasicInfo: async (id) => request(`/events/${id}/basic-info`, { skipCache: true }),
+    updateBasicInfo: async (id, payload) => request(`/events/${id}/basic-info`, {
       method: 'PUT',
       body: JSON.stringify(payload),
     }),

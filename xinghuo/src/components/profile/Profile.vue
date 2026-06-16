@@ -47,6 +47,10 @@ const animatedStats = ref({
   winRate: 0
 })
 const overviewType = ref('normal')
+const cupHistory = ref(null)
+const cupHistoryLoading = ref(false)
+const expandedMobileMatchId = ref(null)
+const showPowerFormula = ref(false)
 const getOverviewByType = (stats, type) => {
   if (!stats) return null
   const empty = { roundsPlayed: 0, wins: 0, kills: 0, kdRatio: 0, winRate: 0 }
@@ -155,6 +159,35 @@ const formatDateTime = (value) => {
   return date.toLocaleString('zh-CN', { hour12: false })
 }
 
+const formatMatchDateShort = (value) => {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
+const formatDamage = (value) => {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return '--'
+  return num.toFixed(1)
+}
+
+const toggleMobileMatch = async (row) => {
+  if (!row?.matchId) return
+  if (expandedMobileMatchId.value === row.matchId) {
+    expandedMobileMatchId.value = null
+    return
+  }
+  expandedMobileMatchId.value = row.matchId
+  await handleViewMatchDetail(row)
+}
+
 const formatSeasonLabel = (seasonId, isCurrentSeason = false) => {
   const text = String(seasonId || '').trim()
   if (!text) return ''
@@ -226,6 +259,32 @@ const animatePubgNumbers = (targetStats) => {
     }
   }
   requestAnimationFrame(step)
+}
+
+const formatCupDate = (value) => {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return date.toLocaleDateString('zh-CN', {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+  })
+}
+
+const fetchCupHistory = async () => {
+  cupHistoryLoading.value = true
+  try {
+    cupHistory.value = await userApi.getCupHistory()
+  } catch (error) {
+    console.warn('获取杯赛战绩失败:', error)
+    cupHistory.value = {
+      summary: { seasonsPlayed: 0, championships: 0, bestRank: null, totalKills: 0 },
+      seasons: [],
+    }
+  } finally {
+    cupHistoryLoading.value = false
+  }
 }
 
 // 获取用户信息
@@ -555,6 +614,7 @@ const onAvatarFileChange = (uploadFile) => {
 // 生命周期钩子
 onMounted(async () => {
   await fetchUserData()
+  fetchCupHistory()
 })
 </script>
 
@@ -563,36 +623,31 @@ onMounted(async () => {
     <div class="container">
       <!-- 加载状态 -->
       <div v-if="isLoading" class="profile-layout skeleton-layout">
-        <div class="left-sidebar">
-          <el-card shadow="hover" class="profile-info-card skeleton-card">
-            <div class="profile-skeleton-info">
-              <el-skeleton animated>
-                <template #template>
-                  <div class="skeleton-avatar-wrap">
+          <el-card shadow="hover" class="profile-info-card skeleton-card profile-info-section">
+            <div class="profile-info profile-info-skeleton">
+              <div class="profile-info-avatar">
+                <el-skeleton animated>
+                  <template #template>
                     <el-skeleton-item variant="circle" class="skeleton-avatar" />
-                  </div>
-                  <el-skeleton-item variant="h3" class="skeleton-line skeleton-line-title" />
-                  <el-skeleton-item variant="text" class="skeleton-line" />
-                  <el-skeleton-item variant="text" class="skeleton-line" />
-                  <el-skeleton-item variant="text" class="skeleton-line skeleton-line-short" />
-                  <el-skeleton-item variant="button" class="skeleton-btn" />
-                </template>
-              </el-skeleton>
+                  </template>
+                </el-skeleton>
+              </div>
+              <div class="profile-info-content">
+                <el-skeleton animated>
+                  <template #template>
+                    <el-skeleton-item variant="h3" class="skeleton-line skeleton-line-title skeleton-line-left" />
+                    <el-skeleton-item variant="text" class="skeleton-line skeleton-line-left" />
+                    <el-skeleton-item variant="text" class="skeleton-line skeleton-line-left" />
+                    <el-skeleton-item variant="text" class="skeleton-line skeleton-line-short skeleton-line-left" />
+                    <el-skeleton-item variant="button" class="skeleton-btn skeleton-btn-left" />
+                  </template>
+                </el-skeleton>
+              </div>
             </div>
           </el-card>
 
-          <el-card shadow="hover" class="module-card skeleton-card">
-            <el-skeleton animated>
-              <template #template>
-                <el-skeleton-item variant="h3" class="skeleton-section-title" />
-                <el-skeleton-item variant="text" class="skeleton-line" />
-              </template>
-            </el-skeleton>
-          </el-card>
-        </div>
-
-        <div class="right-content">
-          <el-card shadow="hover" class="hero-stat-card skeleton-card">
+          <div class="pubg-content">
+          <el-card shadow="hover" class="pubg-card skeleton-card">
             <el-skeleton animated>
               <template #template>
                 <el-skeleton-item variant="h3" class="skeleton-hero-title" />
@@ -600,12 +655,27 @@ onMounted(async () => {
                 <div class="skeleton-kpi-grid">
                   <el-skeleton-item v-for="item in 6" :key="item" variant="rect" class="skeleton-kpi-card" />
                 </div>
+              </template>
+            </el-skeleton>
+          </el-card>
+          <el-card shadow="hover" class="pubg-card skeleton-card">
+            <el-skeleton animated>
+              <template #template>
                 <el-skeleton-item variant="h3" class="skeleton-section-title" />
                 <el-skeleton-item variant="rect" class="skeleton-table" />
               </template>
             </el-skeleton>
           </el-card>
-        </div>
+          </div>
+
+          <el-card shadow="hover" class="module-card skeleton-card cup-history-section">
+            <el-skeleton animated>
+              <template #template>
+                <el-skeleton-item variant="h3" class="skeleton-section-title" />
+                <el-skeleton-item variant="text" class="skeleton-line" />
+              </template>
+            </el-skeleton>
+          </el-card>
       </div>
       
       <!-- 错误提示 -->
@@ -620,12 +690,9 @@ onMounted(async () => {
       
       <!-- 左右布局内容 -->
       <div v-else-if="userData" class="profile-layout">
-        <!-- 左侧栏 - 个人信息 -->
-        <div class="left-sidebar">
-          <!-- 个人信息区域 -->
-          <div class="profile-section profile-info-section">
-            <el-card shadow="hover" class="profile-info-card">
+          <el-card shadow="hover" class="profile-info-card profile-info-section">
               <div class="profile-info">
+                <div class="profile-info-avatar">
                 <el-upload
                   ref="avatarUploadRef"
                   class="avatar-upload-trigger"
@@ -645,7 +712,9 @@ onMounted(async () => {
                     </div>
                   </template>
                 </el-upload>
-                
+                </div>
+
+                <div class="profile-info-content">
                 <div class="user-details" v-if="!isEditing">
                   <h2>{{ userData.username }}</h2>
                   <p class="user-real-name" v-if="userData.real_name">姓名: {{ userData.real_name }}</p>
@@ -680,119 +749,120 @@ onMounted(async () => {
                     </el-form-item>
                   </el-form>
                 </div>
+                </div>
+              </div>
+          </el-card>
+
+          <div class="pubg-content">
+          <el-card v-if="!isPubgBound" shadow="hover" class="pubg-card pubg-card-bind">
+            <h3 class="pubg-card-title">账号绑定</h3>
+            <p class="pubg-card-desc">绑定游戏账号后可查看战力值、统计总览与对局记录。</p>
+            <el-form class="hero-bind-form" label-position="top" @submit.prevent="handleBindPubg">
+              <el-form-item label="平台">
+                <el-select v-model="pubgBindingForm.platform" style="width: 100%">
+                  <el-option label="Steam" value="steam" />
+                  <el-option label="Kakao" value="kakao" />
+                  <el-option label="Xbox" value="xbox" />
+                  <el-option label="PlayStation" value="psn" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="玩家昵称">
+                <el-input v-model="pubgBindingForm.playerName" placeholder="请输入游戏内昵称" />
+              </el-form-item>
+              <el-button type="primary" :loading="pubgLoading" @click="handleBindPubg">绑定并同步战绩</el-button>
+            </el-form>
+          </el-card>
+
+          <template v-else>
+            <el-card shadow="hover" class="pubg-card pubg-card-bind">
+              <h3 class="pubg-card-title">账号绑定</h3>
+              <div class="panel-bind-info">
+                <div class="bind-meta">
+                  <p>已绑定账号：{{ userData.pubgBinding.playerName }}</p>
+                  <p>平台：{{ userData.pubgBinding.platform.toUpperCase() }}</p>
+                </div>
+                <div class="hero-actions hero-actions-compact">
+                  <el-button plain :loading="isRefreshingStats" @click="handleRefreshPubgStats">同步战绩</el-button>
+                  <el-button type="warning" plain @click="startRebind">换绑</el-button>
+                  <el-button type="danger" plain :loading="pubgLoading" @click="handleUnbindPubg">解绑</el-button>
+                </div>
+              </div>
+              <div v-if="isRebinding" class="hero-rebind">
+                <el-form label-position="top" @submit.prevent="handleBindPubg">
+                  <el-form-item label="新平台">
+                    <el-select v-model="pubgBindingForm.platform" style="width: 100%">
+                      <el-option label="Steam" value="steam" />
+                      <el-option label="Kakao" value="kakao" />
+                      <el-option label="Xbox" value="xbox" />
+                      <el-option label="PlayStation" value="psn" />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="新玩家昵称">
+                    <el-input v-model="pubgBindingForm.playerName" placeholder="请输入新的游戏内昵称" />
+                  </el-form-item>
+                  <div class="hero-actions">
+                    <el-button type="warning" :loading="pubgLoading" @click="handleBindPubg">确认换绑</el-button>
+                    <el-button @click="isRebinding = false">取消</el-button>
+                  </div>
+                </el-form>
               </div>
             </el-card>
-          </div>
 
-        </div>
-
-        <div class="right-content">
-          <el-card shadow="hover" class="hero-stat-card">
-            <div class="hero-bg-glow"></div>
-            <div class="hero-header">
-              <div>
-                <h2 class="hero-title">PUBG 战绩总览</h2>
-                <p class="hero-subtitle">更直观地追踪你的赛季表现</p>
+            <el-card shadow="hover" class="pubg-card pubg-card-power">
+              <h3 class="pubg-card-title">星火战力值</h3>
+              <p class="power-subtitle">最近 {{ pubgPower?.requestedMatches || 200 }} 场竞技模式综合评分</p>
+              <div class="power-hero" :class="`power-tone-${pubgPowerTone}`" v-loading="pubgPowerLoading">
+                <div class="power-hero-score">
+                  <span class="power-score-num">{{ pubgPower?.score ?? '--' }}</span>
+                  <span class="power-score-label">战力值</span>
+                </div>
+                <div
+                  class="power-hero-level"
+                  :class="pubgPower?.level ? `power-level-${pubgPowerTone}` : 'power-level-empty'"
+                >
+                  <span class="power-hero-level-label">评级</span>
+                  <strong class="power-hero-level-value">{{ pubgPower?.level || '暂无' }}</strong>
+                </div>
               </div>
-              <div class="hero-badge" v-if="isPubgBound">
-                {{ userData.pubgBinding.playerName }} · {{ userData.pubgBinding.platform.toUpperCase() }}
+              <div class="power-metrics" v-if="pubgPower">
+                <div class="power-metric-item"><span class="power-metric-label">KD</span><span class="power-metric-value">{{ pubgPower.kd }}</span></div>
+                <div class="power-metric-item"><span class="power-metric-label">场均伤害</span><span class="power-metric-value">{{ pubgPower.avgDamage }}</span></div>
+                <div class="power-metric-item"><span class="power-metric-label">平均排名</span><span class="power-metric-value">{{ pubgPower.avgRank }}</span></div>
+                <div class="power-metric-item"><span class="power-metric-label">样本场次</span><span class="power-metric-value">{{ pubgPower.matchesAnalyzed }}</span></div>
               </div>
-            </div>
-
-            <div v-if="!isPubgBound" class="hero-bind-panel">
-              <p class="hero-empty-text">当前未绑定游戏数据，绑定后可在此查看实时战绩看板。</p>
-              <el-form class="hero-bind-form" label-position="top" @submit.prevent="handleBindPubg">
-                <el-form-item label="平台">
-                  <el-select v-model="pubgBindingForm.platform" style="width: 100%">
-                    <el-option label="Steam" value="steam" />
-                    <el-option label="Kakao" value="kakao" />
-                    <el-option label="Xbox" value="xbox" />
-                    <el-option label="PlayStation" value="psn" />
-                  </el-select>
-                </el-form-item>
-                <el-form-item label="玩家昵称">
-                  <el-input v-model="pubgBindingForm.playerName" placeholder="请输入游戏内昵称" />
-                </el-form-item>
-                <el-button type="primary" :loading="pubgLoading" @click="handleBindPubg">绑定并同步战绩</el-button>
-              </el-form>
-            </div>
-
-            <div v-else class="hero-content hero-content-a">
-              <section class="panel-section card-like-panel">
-                <div class="panel-title">账号绑定区</div>
-                <div class="panel-bind-info">
-                  <div class="bind-meta">
-                    <p>已绑定账号：{{ userData.pubgBinding.playerName }}</p>
-                    <p>平台：{{ userData.pubgBinding.platform.toUpperCase() }}</p>
-                  </div>
-                  <div class="hero-actions">
-                    <el-button plain :loading="isRefreshingStats" @click="handleRefreshPubgStats">同步战绩</el-button>
-                    <el-button type="warning" plain @click="startRebind">换绑</el-button>
-                    <el-button type="danger" plain :loading="pubgLoading" @click="handleUnbindPubg">解绑</el-button>
-                  </div>
+              <button
+                v-if="pubgPower"
+                type="button"
+                class="power-formula-toggle"
+                @click="showPowerFormula = !showPowerFormula"
+              >
+                {{ showPowerFormula ? '收起计算说明' : '查看计算说明' }}
+              </button>
+              <div class="power-formula-hint" v-if="pubgPower && showPowerFormula">
+                <div class="power-formula-title">计算说明</div>
+                <div class="power-formula-line">战力值 = round((KD因子 × 0.45 + 伤害因子 × 0.30 + 排名因子 × 0.25) × 1000)</div>
+                <ul class="power-formula-list">
+                  <li>KD因子 = min(KD, 5) / 5</li>
+                  <li>伤害因子 = min(场均伤害, 600) / 600</li>
+                  <li>排名因子 = clamp((101 - 平均排名) / 100, 0, 1)</li>
+                </ul>
+                <div class="power-level-map">
+                  <span>评级区间：</span>
+                  <span>魔王S(≥920)</span>
+                  <span>S(≥780)</span>
+                  <span>A(≥620)</span>
+                  <span>B(≥520)</span>
+                  <span>C(≥430)</span>
+                  <span>D(≥350)</span>
+                  <span>E(&lt;350)</span>
                 </div>
-                <div v-if="isRebinding" class="hero-rebind">
-                  <el-form label-position="top" @submit.prevent="handleBindPubg">
-                    <el-form-item label="新平台">
-                      <el-select v-model="pubgBindingForm.platform" style="width: 100%">
-                        <el-option label="Steam" value="steam" />
-                        <el-option label="Kakao" value="kakao" />
-                        <el-option label="Xbox" value="xbox" />
-                        <el-option label="PlayStation" value="psn" />
-                      </el-select>
-                    </el-form-item>
-                    <el-form-item label="新玩家昵称">
-                      <el-input v-model="pubgBindingForm.playerName" placeholder="请输入新的游戏内昵称" />
-                    </el-form-item>
-                    <div class="hero-actions">
-                      <el-button type="warning" :loading="pubgLoading" @click="handleBindPubg">确认换绑</el-button>
-                      <el-button @click="isRebinding = false">取消</el-button>
-                    </div>
-                  </el-form>
-                </div>
-              </section>
+              </div>
+            </el-card>
 
-              <section class="panel-section card-like-panel">
-                <div class="panel-title">星火战力值</div>
-                <div class="power-card" :class="`power-${pubgPowerTone}`" v-loading="pubgPowerLoading">
-                  <div class="power-main">
-                    <div>
-                      <div class="power-subtitle">最近 {{ pubgPower?.requestedMatches || 200 }} 场竞技模式综合评分</div>
-                    </div>
-                    <div class="power-score">{{ pubgPower?.score ?? '--' }}</div>
-                  </div>
-                  <div class="power-meta" v-if="pubgPower">
-                    <span>评级：{{ pubgPower.level || '暂无评级' }}</span>
-                    <span>KD：{{ pubgPower.kd }}</span>
-                    <span>场均伤害：{{ pubgPower.avgDamage }}</span>
-                    <span>平均排名：{{ pubgPower.avgRank }}</span>
-                    <span>样本：{{ pubgPower.matchesAnalyzed }} 场</span>
-                  </div>
-                  <div class="power-formula-hint" v-if="pubgPower">
-                    <div class="power-formula-title">计算说明</div>
-                    <div class="power-formula-line">战力值 = round((KD因子 × 0.45 + 伤害因子 × 0.30 + 排名因子 × 0.25) × 1000)</div>
-                    <ul class="power-formula-list">
-                      <li>KD因子 = min(KD, 5) / 5</li>
-                      <li>伤害因子 = min(场均伤害, 600) / 600</li>
-                      <li>排名因子 = clamp((101 - 平均排名) / 100, 0, 1)</li>
-                    </ul>
-                    <div class="power-level-map">
-                      <span>评级区间：</span>
-                      <span>魔王S(≥920)</span>
-                      <span>S(≥780)</span>
-                      <span>A(≥620)</span>
-                      <span>B(≥520)</span>
-                      <span>C(≥430)</span>
-                      <span>D(≥350)</span>
-                      <span>E(&lt;350)</span>
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              <section class="panel-section card-like-panel">
-                <div class="panel-title">统计总览区</div>
-                <div class="overview-toggle">
+            <el-card shadow="hover" class="pubg-card pubg-card-stats">
+              <div class="stats-card-head">
+                <h3 class="pubg-card-title">统计总览</h3>
+                <div class="overview-toggle stats-type-toggle">
                   <el-button :type="overviewType === 'normal' ? 'primary' : 'default'" plain @click="handleOverviewTypeChange('normal')">
                     匹配总览
                   </el-button>
@@ -800,111 +870,186 @@ onMounted(async () => {
                     竞技总览
                   </el-button>
                 </div>
-                <div class="panel-hint">KD 计算规则：KD = 总击杀 / 总失败场次（losses）。当 losses 为 0 时，按总击杀显示。</div>
-                <div v-if="pubgDisplay" class="kpi-row">
-                  <div class="kpi-card"><div class="kpi-label">总场次</div><div class="kpi-value">{{ pubgDisplay.roundsPlayed }}</div></div>
-                  <div class="kpi-card"><div class="kpi-label">胜场</div><div class="kpi-value">{{ pubgDisplay.wins }}</div></div>
-                  <div class="kpi-card"><div class="kpi-label">吃鸡率</div><div class="kpi-value">{{ pubgDisplay.winRate }}%</div></div>
-                  <div class="kpi-card"><div class="kpi-label">总击杀</div><div class="kpi-value">{{ pubgDisplay.kills }}</div></div>
-                  <div class="kpi-card"><div class="kpi-label">KD</div><div class="kpi-value">{{ pubgDisplay.kdRatio }}</div></div>
-                  <div class="kpi-card"><div class="kpi-label">场均击杀</div><div class="kpi-value">{{ pubgDisplay.killsPerMatch }}</div></div>
+              </div>
+              <p class="stats-kd-hint">KD = 总击杀 / 总失败场次；失败为 0 时按总击杀计</p>
+              <div v-if="pubgDisplay" class="stats-kpi-grid">
+                <div class="stats-kpi-item">
+                  <div class="stats-kpi-label">总场次</div>
+                  <div class="stats-kpi-value">{{ pubgDisplay.roundsPlayed }}</div>
                 </div>
-                <div v-else class="hero-empty">暂无统计数据，点击“同步战绩”获取最新数据。</div>
-              </section>
-
-              <section class="panel-section card-like-panel">
-                <div class="panel-title">游戏对局详情</div>
-                <div class="hero-filters">
-                  <el-select v-model="matchQuery.mode" clearable placeholder="模式" style="width: 130px">
-                    <el-option label="Solo" value="solo" />
-                    <el-option label="Duo" value="duo" />
-                    <el-option label="Squad" value="squad" />
-                    <el-option label="自定义" value="custom" />
-                  </el-select>
-                  <el-select v-model="matchQuery.season" clearable disabled placeholder="赛季筛选暂不可用" style="width: 280px">
-                    <el-option
-                      v-for="item in seasonOptions"
-                      :key="item.value"
-                      :label="item.label"
-                      :value="item.value"
-                    />
-                  </el-select>
-                  <el-button type="primary" @click="applyMatchFilter">应用筛选</el-button>
+                <div class="stats-kpi-item">
+                  <div class="stats-kpi-label">胜场</div>
+                  <div class="stats-kpi-value">{{ pubgDisplay.wins }}</div>
                 </div>
-                <div v-if="seasonFilterNote" class="panel-hint">{{ seasonFilterNote }}</div>
+                <div class="stats-kpi-item">
+                  <div class="stats-kpi-label">吃鸡率</div>
+                  <div class="stats-kpi-value">{{ pubgDisplay.winRate }}%</div>
+                </div>
+                <div class="stats-kpi-item">
+                  <div class="stats-kpi-label">总击杀</div>
+                  <div class="stats-kpi-value">{{ pubgDisplay.kills }}</div>
+                </div>
+                <div class="stats-kpi-item">
+                  <div class="stats-kpi-label">KD</div>
+                  <div class="stats-kpi-value">{{ pubgDisplay.kdRatio }}</div>
+                </div>
+                <div class="stats-kpi-item">
+                  <div class="stats-kpi-label">场均击杀</div>
+                  <div class="stats-kpi-value">{{ pubgDisplay.killsPerMatch }}</div>
+                </div>
+              </div>
+              <div v-else class="stats-empty">暂无统计数据，点击「同步战绩」获取最新数据</div>
+            </el-card>
 
-              <el-table
-                :data="pubgMatches"
-                v-loading="matchesLoading"
-                stripe
-                class="match-table"
-                row-key="matchId"
-                :expand-row-keys="expandedMatchRowKeys"
-                @expand-change="handleExpandChange"
-              >
-                <el-table-column type="expand">
-                  <template #default="{ row }">
-                    <div class="row-expand-panel" v-loading="expandedRowLoadingMap[row.matchId]">
-                      <template v-if="matchDetailMap[row.matchId]">
-                        <div class="team-members" v-if="Array.isArray(matchDetailMap[row.matchId].teamMembers) && matchDetailMap[row.matchId].teamMembers.length">
-                          <el-table :data="matchDetailMap[row.matchId].teamMembers" size="small" class="team-table">
-                            <el-table-column label="成员" min-width="160">
-                              <template #default="{ row: member }">
-                                <span :class="{ 'self-tag': member.isSelf }">{{ member.name }}{{ member.isSelf ? '（我）' : '' }}</span>
-                              </template>
-                            </el-table-column>
-                            <el-table-column prop="kills" label="击杀" width="80" />
-                            <el-table-column prop="assists" label="助攻" width="80" />
-                            <el-table-column prop="damageDealt" label="伤害" width="100" />
-                            <el-table-column prop="rank" label="排名" width="80" />
-                          </el-table>
-                        </div>
-                      </template>
-                      <template v-else>
-                        <p class="detail-placeholder">正在加载比赛详情...</p>
-                      </template>
+            <el-card shadow="hover" class="pubg-card pubg-card-matches">
+              <h3 class="pubg-card-title">游戏对局</h3>
+              <div class="match-filters">
+                <el-select
+                  v-model="matchQuery.mode"
+                  clearable
+                  placeholder="全部模式"
+                  class="match-filter-select"
+                >
+                  <el-option label="Solo" value="solo" />
+                  <el-option label="Duo" value="duo" />
+                  <el-option label="Squad" value="squad" />
+                  <el-option label="自定义" value="custom" />
+                </el-select>
+                <el-button type="primary" plain :loading="matchesLoading" @click="applyMatchFilter">查询</el-button>
+              </div>
+              <p v-if="seasonFilterNote" class="match-filter-hint">{{ seasonFilterNote }}</p>
+
+              <div class="match-list" v-loading="matchesLoading">
+                <article
+                  v-for="row in pubgMatches"
+                  :key="row.matchId"
+                  class="match-item"
+                  :class="{ expanded: expandedMobileMatchId === row.matchId }"
+                >
+                  <button type="button" class="match-item-main" @click="toggleMobileMatch(row)">
+                    <div class="match-item-rank" :class="{ top3: row.rank <= 3 }">#{{ row.rank }}</div>
+                    <div class="match-item-body">
+                      <div class="match-item-row">
+                        <span class="match-item-map">{{ formatMapName(row.mapName) }}</span>
+                        <span class="match-item-time">{{ formatMatchDateShort(row.createdAt) }}</span>
+                      </div>
+                      <div class="match-item-row match-item-row-sub">
+                        <span class="match-item-tags">
+                          <span class="match-tag">{{ formatModeName(row.gameMode) }}</span>
+                          <span class="match-tag">{{ formatMatchType(row) }}</span>
+                        </span>
+                        <span class="match-item-metrics">
+                          <span class="match-metric"><em>K</em>{{ row.kills }}</span>
+                          <span class="match-metric"><em>伤</em>{{ formatDamage(row.damageDealt) }}</span>
+                        </span>
+                      </div>
                     </div>
-                  </template>
-                </el-table-column>
-                <el-table-column label="比赛时间" min-width="180">
-                  <template #default="{ row }">
-                    {{ formatDateTime(row.createdAt) }}
-                  </template>
-                </el-table-column>
-                <el-table-column label="模式" width="110">
-                  <template #default="{ row }">
-                    {{ formatModeName(row.gameMode) }}
-                  </template>
-                </el-table-column>
-                <el-table-column label="类型" width="100">
-                  <template #default="{ row }">
-                    {{ formatMatchType(row) }}
-                  </template>
-                </el-table-column>
-                <el-table-column label="地图" min-width="120">
-                  <template #default="{ row }">
-                    {{ formatMapName(row.mapName) }}
-                  </template>
-                </el-table-column>
-                <el-table-column prop="rank" label="排名" width="80" />
-                <el-table-column prop="kills" label="击杀" width="80" />
-                <el-table-column prop="damageDealt" label="伤害" width="110" />
-              </el-table>
+                    <span class="match-item-chevron" aria-hidden="true"></span>
+                  </button>
+                  <div
+                    v-if="expandedMobileMatchId === row.matchId"
+                    class="match-item-detail"
+                    v-loading="expandedRowLoadingMap[row.matchId]"
+                  >
+                    <div class="match-detail-title">队友数据</div>
+                    <template v-if="matchDetailMap[row.matchId]?.teamMembers?.length">
+                      <div class="match-member-table">
+                        <div class="match-member-head">
+                          <span class="match-member-col name">成员</span>
+                          <span class="match-member-col stat">K</span>
+                          <span class="match-member-col stat">A</span>
+                          <span class="match-member-col stat damage">伤害</span>
+                        </div>
+                        <div
+                          v-for="member in matchDetailMap[row.matchId].teamMembers"
+                          :key="member.name"
+                          class="match-member-row"
+                        >
+                          <span class="match-member-col name" :class="{ 'self-tag': member.isSelf }">
+                            {{ member.name }}{{ member.isSelf ? '（我）' : '' }}
+                          </span>
+                          <span class="match-member-col stat">{{ member.kills ?? 0 }}</span>
+                          <span class="match-member-col stat">{{ member.assists ?? 0 }}</span>
+                          <span class="match-member-col stat damage">{{ formatDamage(member.damageDealt) }}</span>
+                        </div>
+                      </div>
+                    </template>
+                    <p v-else-if="!expandedRowLoadingMap[row.matchId]" class="detail-placeholder">暂无队友数据</p>
+                  </div>
+                </article>
+                <p v-if="!matchesLoading && !pubgMatches.length" class="match-list-empty">暂无对局记录</p>
+              </div>
 
-              <div class="table-footer">
+              <div v-if="pubgMatchesTotal > matchQuery.pageSize" class="match-pagination">
                 <el-pagination
                   background
-                  layout="prev, pager, next, total"
+                  layout="prev, pager, next"
                   :current-page="matchQuery.page"
                   :page-size="matchQuery.pageSize"
                   :total="pubgMatchesTotal"
                   @current-change="handleMatchPageChange"
                 />
               </div>
-              </section>
-            </div>
-          </el-card>
+            </el-card>
+          </template>
         </div>
+
+        <el-card shadow="hover" class="cup-history-card cup-history-section" v-loading="cupHistoryLoading">
+            <h3 class="cup-history-title">我的杯赛战绩</h3>
+            <p class="cup-history-subtitle">已结束杯赛中的参赛记录</p>
+
+            <template v-if="cupHistory?.summary?.seasonsPlayed">
+              <div class="cup-summary-grid">
+                <div class="cup-summary-item">
+                  <span class="cup-summary-value">{{ cupHistory.summary.seasonsPlayed }}</span>
+                  <span class="cup-summary-label">参赛届数</span>
+                </div>
+                <div class="cup-summary-item">
+                  <span class="cup-summary-value">{{ cupHistory.summary.championships }}</span>
+                  <span class="cup-summary-label">夺冠次数</span>
+                </div>
+                <div class="cup-summary-item">
+                  <span class="cup-summary-value">
+                    {{ cupHistory.summary.bestRank ? `#${cupHistory.summary.bestRank}` : '—' }}
+                  </span>
+                  <span class="cup-summary-label">最佳名次</span>
+                </div>
+                <div class="cup-summary-item">
+                  <span class="cup-summary-value">{{ cupHistory.summary.totalKills }}</span>
+                  <span class="cup-summary-label">累计击杀</span>
+                </div>
+              </div>
+
+              <div class="profile-table-scroll cup-table-scroll">
+                <el-table
+                  :data="cupHistory.seasons"
+                  size="small"
+                  class="cup-season-table"
+                  empty-text="暂无记录"
+                >
+                  <el-table-column label="杯赛" min-width="100" prop="title" show-overflow-tooltip />
+                  <el-table-column label="结束" width="80">
+                    <template #default="{ row }">{{ formatCupDate(row.finishedAt) }}</template>
+                  </el-table-column>
+                  <el-table-column label="队伍" min-width="88">
+                    <template #default="{ row }">
+                      #{{ String(row.teamNumber).padStart(2, '0') }} {{ row.teamName }}
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="名次" width="56" align="center">
+                    <template #default="{ row }">
+                      <span :class="{ 'cup-champion': row.isChampion }">
+                        {{ row.teamRank ? `#${row.teamRank}` : '—' }}
+                      </span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="击杀" width="52" align="center" prop="totalKills" />
+                </el-table>
+              </div>
+            </template>
+
+            <p v-else class="cup-history-empty">暂无已结束的杯赛参赛记录</p>
+        </el-card>
       </div>
     </div>
   </div>
@@ -917,6 +1062,17 @@ onMounted(async () => {
   min-height: 100vh;
   background-color: transparent;
   position: relative;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.profile-container > .container {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .profile-container h2 {
@@ -928,29 +1084,183 @@ onMounted(async () => {
   letter-spacing: -0.01em;
 }
 
-/* 左右布局 */
+/* 页面布局：单列卡片流 */
 .profile-layout {
   display: flex;
-  gap: 2rem;
-  align-items: flex-start;
+  flex-direction: column;
+  gap: 1rem;
+  width: 100%;
+  max-width: 920px;
+  margin: 0 auto;
+  min-width: 0;
 }
 
-/* 左侧栏 */
-.left-sidebar {
-  width: 350px;
-  flex-shrink: 0;
-}
-
-.right-content {
-  flex: 1;
+.profile-info-section,
+.cup-history-section,
+.pubg-content {
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
 }
 
 .profile-section {
-  margin-bottom: 2rem;
+  margin-bottom: 0;
   padding: 0;
   background-color: transparent;
   border-radius: 0;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.profile-info-card,
+.cup-history-card,
+.pubg-card {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border-radius: 14px;
+}
+
+.profile-info-card :deep(.el-card__body),
+.cup-history-card :deep(.el-card__body),
+.pubg-card :deep(.el-card__body) {
+  padding: 1.25rem;
+}
+
+.pubg-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.pubg-card-title {
+  margin: 0 0 0.85rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #1f2d3d;
+}
+
+.pubg-card-desc {
+  margin: -0.35rem 0 1rem;
+  font-size: 0.85rem;
+  color: #909399;
+  line-height: 1.5;
+}
+
+.stats-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+}
+
+.stats-card-head .pubg-card-title {
+  margin-bottom: 0;
+  flex-shrink: 0;
+}
+
+.stats-type-toggle {
+  flex: 1 1 auto;
+  max-width: 280px;
+  padding: 0.25rem;
+  border-radius: 10px;
+  background: #f0f4fa;
+  gap: 0.25rem;
+  margin-bottom: 0;
+}
+
+.stats-type-toggle :deep(.el-button) {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  border: none !important;
+  background: transparent;
+  padding: 0.45rem 0.5rem;
+  font-size: 0.8rem;
+  height: auto;
+}
+
+.stats-type-toggle :deep(.el-button--primary),
+.stats-type-toggle :deep(.el-button--primary.is-plain) {
+  background: #fff !important;
+  color: #2458ff !important;
+  --el-button-text-color: #2458ff;
+  --el-button-bg-color: #fff;
+  --el-button-border-color: transparent;
+  --el-button-hover-text-color: #2458ff;
+  --el-button-hover-bg-color: #fff;
+  --el-button-hover-border-color: transparent;
+  --el-button-active-text-color: #1d4ed8;
+  --el-button-active-bg-color: #fff;
+  --el-button-active-border-color: transparent;
+  box-shadow: 0 1px 4px rgba(36, 88, 255, 0.12);
+}
+
+.stats-type-toggle :deep(.el-button--default),
+.stats-type-toggle :deep(.el-button--default.is-plain) {
+  color: #607086 !important;
+  --el-button-text-color: #607086;
+  --el-button-bg-color: transparent;
+  --el-button-border-color: transparent;
+  --el-button-hover-text-color: #2458ff;
+  --el-button-hover-bg-color: transparent;
+  --el-button-hover-border-color: transparent;
+}
+
+.stats-kd-hint {
+  margin: 0 0 0.85rem;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: #8a97ab;
+}
+
+.stats-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.stats-kpi-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 4.25rem;
+  padding: 0.7rem 0.45rem;
+  border-radius: 10px;
+  background: #f7f9fc;
+  border: 1px solid #e8edf5;
+  text-align: center;
+}
+
+.stats-kpi-label {
+  font-size: 0.72rem;
+  color: #909399;
+  line-height: 1.3;
+}
+
+.stats-kpi-value {
+  margin-top: 0.2rem;
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #303133;
+  line-height: 1.2;
+  word-break: break-all;
+}
+
+.stats-empty {
+  margin: 0;
+  padding: 1.25rem 0.75rem;
+  text-align: center;
+  font-size: 0.85rem;
+  color: #909399;
+  background: #f7f9fc;
+  border-radius: 10px;
 }
 
 .profile-section h3 {
@@ -963,12 +1273,42 @@ onMounted(async () => {
 
 .profile-info {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  gap: 1.5rem;
-  padding: 1.5rem;
-  background-color: #ffffff;
-  border-radius: 12px;
+  gap: 0;
+  width: 100%;
+  min-height: 7.5rem;
+  box-sizing: border-box;
+}
+
+.profile-info-avatar,
+.profile-info-content {
+  flex: 0 0 50%;
+  max-width: 50%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.profile-info-avatar {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  align-self: stretch;
+  padding: 0.75rem 1rem;
+  border-right: 1px solid #f0f2f5;
+}
+
+.profile-info-content {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-self: stretch;
+  padding: 0.75rem 1rem 0.75rem 1.25rem;
+}
+
+.profile-info-content .user-details,
+.profile-info-content .user-edit {
+  width: 100%;
 }
 
 
@@ -1025,16 +1365,17 @@ onMounted(async () => {
 }
 
 .user-details {
-  text-align: center;
+  text-align: left;
   width: 100%;
 }
 
 .user-details h2 {
-  margin: 0 0 0.25rem 0;
+  margin: 0 0 0.5rem 0;
   font-size: 1.25rem;
   font-weight: 600;
   color: #1d1d1f;
   letter-spacing: -0.01em;
+  line-height: 1.3;
 }
 
 .user-account {
@@ -1055,69 +1396,192 @@ onMounted(async () => {
 
 .user-actions {
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 0.75rem;
   align-items: center;
+  margin-top: 0.5rem;
 }
 
 .user-edit {
   width: 100%;
-  max-width: 300px;
-  text-align: center;
+  max-width: none;
+  text-align: left;
 }
 
 /* 响应式布局 */
 @media (max-width: 768px) {
   .profile-layout {
-    flex-direction: column;
+    gap: 0.75rem;
   }
-  
-  .left-sidebar {
-    width: 100%;
+
+  .cup-history-section {
+    overflow: hidden;
   }
-  
+
+  .cup-history-card {
+    overflow: hidden;
+  }
+
+  .cup-history-card :deep(.el-card__body) {
+    overflow: hidden;
+  }
+
+  .profile-info-card :deep(.el-card__body),
+  .cup-history-card :deep(.el-card__body),
+  .pubg-card :deep(.el-card__body) {
+    padding: 1rem;
+  }
+
   .profile-info {
     flex-direction: column;
-    text-align: center;
+    align-items: stretch;
     gap: 1rem;
-    padding: 1.25rem;
+    min-height: 0;
   }
-  
+
+  .profile-info-avatar,
+  .profile-info-content {
+    flex: none;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .profile-info-avatar {
+    padding: 0.25rem 0 0;
+    border-right: none;
+    border-bottom: 1px solid #f0f2f5;
+    padding-bottom: 1rem;
+  }
+
+  .profile-info-content {
+    padding: 0;
+  }
+
+  .user-details {
+    text-align: center;
+  }
+
+  .user-actions {
+    justify-content: center;
+  }
+
+  .user-edit {
+    text-align: left;
+  }
+
   .avatar {
-    width: 70px;
-    height: 70px;
+    width: 72px;
+    height: 72px;
   }
-  
-  .avatar-edit {
-    bottom: -20px;
-  }
-  
-  .avatar:hover .avatar-edit {
-    bottom: -25px;
-  }
-  
+
   .user-details h2 {
     font-size: 1.125rem;
   }
-  
-  .user-actions {
+
+  .user-edit {
+    max-width: none;
+    width: 100%;
+  }
+
+  .stats-card-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .stats-type-toggle {
+    max-width: none;
+    width: 100%;
+  }
+
+  .stats-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+  }
+
+  .stats-kpi-item {
+    min-height: 3.75rem;
+    padding: 0.6rem 0.4rem;
+  }
+
+  .stats-kpi-value {
+    font-size: 1.05rem;
+  }
+
+  .pubg-mobile-only {
+    display: block !important;
+  }
+
+  .pubg-desktop-only {
+    display: none !important;
+  }
+
+  .pubg-content {
+    gap: 0.75rem;
+  }
+
+  .pubg-card-power .power-hero {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 0.75rem;
+    padding: 0.9rem 0.75rem;
+  }
+
+  .pubg-card-power .power-hero-score {
     justify-content: center;
+  }
+
+  .pubg-card-power .power-score-num {
+    font-size: 2.1rem;
+  }
+
+  .pubg-card-power .power-hero-level {
+    min-width: 6.5rem;
+    padding: 0.5rem 1rem;
+  }
+
+  .pubg-card-power .power-hero-level-value {
+    font-size: 1.25rem;
+  }
+
+  .pubg-card-power .power-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  .hero-actions-compact {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.4rem;
+    width: 100%;
+  }
+
+  .hero-actions-compact .el-button {
+    margin: 0;
+    padding-left: 0.35rem;
+    padding-right: 0.35rem;
+    font-size: 0.75rem;
   }
 }
 
 /* 深色模式优化 */
-.dark-mode .profile-info {
-  background-color: #1a1a1a;
-}
-
-
-
 .dark-mode .avatar {
   border-color: rgba(255, 255, 255, 0.1);
 }
 
 .dark-mode .avatar:hover {
   border-color: #0071e3;
+}
+
+.dark-mode .profile-info-avatar {
+  border-right-color: rgba(255, 255, 255, 0.08);
+}
+
+@media (max-width: 768px) {
+  .dark-mode .profile-info-avatar {
+    border-right: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
 }
 
 .dark-mode .user-details h2 {
@@ -1136,8 +1600,94 @@ onMounted(async () => {
 
 
 /* 个人信息区域 */
-.profile-info-section {
-  margin-bottom: 3rem;
+.cup-history-title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #1d1d1f;
+}
+
+.cup-history-subtitle {
+  margin: 0.35rem 0 1rem;
+  font-size: 0.82rem;
+  color: #86868b;
+}
+
+.cup-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin-bottom: 1rem;
+}
+
+.cup-summary-item {
+  padding: 0.65rem 0.75rem;
+  border-radius: 10px;
+  background: #f5f5f7;
+  text-align: center;
+}
+
+.cup-summary-value {
+  display: block;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #1d1d1f;
+  line-height: 1.2;
+}
+
+.cup-summary-label {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.72rem;
+  color: #86868b;
+}
+
+.cup-season-table {
+  width: 100%;
+}
+
+.profile-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cup-table-scroll :deep(.el-table) {
+  width: 100%;
+  min-width: 320px;
+}
+
+.cup-table-scroll :deep(.el-table__body-wrapper) {
+  overflow-x: auto;
+}
+
+.match-table-scroll :deep(.el-table) {
+  min-width: 640px;
+}
+
+.filter-select-mode {
+  width: 130px;
+}
+
+.filter-select-season {
+  width: 280px;
+}
+
+.hero-filters .filter-select {
+  flex-shrink: 0;
+}
+
+.cup-champion {
+  color: #9a6b00;
+  font-weight: 700;
+}
+
+.cup-history-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #86868b;
 }
 
 /* 模块卡片样式 */
@@ -1257,11 +1807,14 @@ onMounted(async () => {
 }
 
 .avatar-upload-trigger {
-  display: inline-block;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
 }
 
-.avatar-upload-trigger :deep(.el-upload) {
-  display: block;
+.avatar-upload-trigger :deep(.el-upload__input) {
+  display: none;
 }
 
 /* 深色模式 - 苹果风格 */
@@ -1280,14 +1833,6 @@ onMounted(async () => {
 
 .dark-mode .profile-section h3 {
   color: #ffffff;
-}
-
-.dark-mode .profile-info {
-  background-color: #1a1a1a;
-}
-
-.dark-mode .profile-info:hover {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .dark-mode .user-details h2 {
@@ -1374,66 +1919,110 @@ onMounted(async () => {
   .profile-container {
     padding: 0 0 2rem;
   }
-  
-  .profile-container h2 {
-    font-size: 1.75rem;
+
+  .hero-bind-form {
+    max-width: none;
   }
-  
-  .profile-info {
+
+  .panel-bind-info {
     flex-direction: column;
-    text-align: center;
-    gap: 1.5rem;
-    padding: 1.75rem;
+    align-items: stretch;
   }
-  
-  .avatar {
-    width: 90px;
-    height: 90px;
+
+  .hero-actions {
+    width: 100%;
   }
-  
-  .user-details h2 {
-    font-size: 1.375rem;
+
+  .hero-actions .el-button {
+    flex: 1 1 auto;
+    min-width: 0;
   }
-  
-  .reply-card {
-    padding: 1.25rem;
+
+  .hero-filters {
+    flex-direction: column;
+    align-items: stretch;
   }
-  
-  .post-stats {
-    gap: 1rem;
+
+  .hero-filters .filter-select,
+  .hero-filters .el-button {
+    width: 100%;
   }
-  
-  .el-button--small {
-    padding: 0.4375rem 0.875rem;
-    font-size: 0.75rem;
+
+  .match-filters {
+    flex-direction: column;
+    align-items: stretch;
   }
-  
+
+  .match-filters .el-button {
+    width: 100%;
+  }
+
+  .overview-toggle {
+    flex-wrap: nowrap;
+    width: 100%;
+  }
+
+  .overview-toggle:not(.stats-type-toggle) .el-button {
+    flex: 1 1 0;
+    min-width: 0;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+    white-space: nowrap;
+  }
 }
 
 @media (max-width: 480px) {
   .profile-container {
     padding: 0 0 1.5rem;
   }
-  
-  .profile-container h2 {
-    font-size: 1.5rem;
+
+  .profile-layout {
+    gap: 0.75rem;
   }
-  
-  .profile-info {
-    padding: 1.5rem;
-  }
-  
+
   .avatar {
-    width: 80px;
-    height: 80px;
+    width: 64px;
+    height: 64px;
   }
-  
+
   .user-details h2 {
-    font-size: 1.25rem;
+    font-size: 1.1rem;
   }
-  
-  .reply-card {
-    padding: 1.125rem;
+
+  .cup-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  .cup-summary-value {
+    font-size: 1rem;
+  }
+
+  .hero-actions .el-button {
+    flex: 1 1 100%;
+  }
+
+  .user-actions .el-button {
+    width: 100%;
+  }
+
+  .hero-actions-compact {
+    grid-template-columns: 1fr;
+  }
+
+  .match-item-row-sub {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.35rem;
+  }
+}
+
+/* 触屏设备：头像编辑提示常显 */
+@media (hover: none) {
+  .avatar-edit {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.45);
+    font-size: 0.7rem;
   }
 }
 
@@ -1513,6 +2102,422 @@ onMounted(async () => {
   align-items: stretch;
 }
 
+.pubg-mobile-only {
+  display: none !important;
+}
+
+.pubg-desktop-only {
+  display: block;
+}
+
+.pubg-card-power .power-subtitle {
+  margin: -0.35rem 0 0.75rem;
+  font-size: 0.8rem;
+  color: #8a97ab;
+  line-height: 1.45;
+}
+
+.power-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.1rem;
+  border-radius: 12px;
+  background: linear-gradient(120deg, #f8fbff, #eef5ff);
+  border: 1px solid #e6ecf7;
+}
+
+.power-hero-score {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.power-score-num {
+  font-size: 2.35rem;
+  font-weight: 800;
+  line-height: 1;
+  color: #1f2d3d;
+}
+
+.power-score-label {
+  font-size: 0.82rem;
+  color: #8a97ab;
+  white-space: nowrap;
+}
+
+.power-hero-level {
+  flex-shrink: 0;
+  min-width: 5.5rem;
+  padding: 0.55rem 0.85rem;
+  border-radius: 10px;
+  text-align: center;
+  border: 2px solid #d8e1f2;
+  background: #fff;
+}
+
+.power-hero-level-label {
+  display: block;
+  font-size: 0.68rem;
+  color: #8a97ab;
+  line-height: 1.2;
+}
+
+.power-hero-level-value {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 1.35rem;
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: 0.02em;
+}
+
+.power-tone-legend .power-score-num { color: #9a6b00; }
+.power-tone-high .power-score-num { color: #2458ff; }
+.power-tone-mid .power-score-num { color: #6b4ee6; }
+.power-tone-base .power-score-num { color: #2e7d32; }
+.power-tone-low .power-score-num { color: #6b7280; }
+
+.power-level-legend {
+  border-color: #e6b422;
+  background: linear-gradient(145deg, #fff9e8 0%, #ffe7a3 100%);
+}
+.power-level-legend .power-hero-level-label { color: #9a6b00; }
+.power-level-legend .power-hero-level-value { color: #8a5a00; }
+
+.power-level-high {
+  border-color: #6d9cff;
+  background: linear-gradient(145deg, #f0f6ff 0%, #d6e6ff 100%);
+}
+.power-level-high .power-hero-level-label { color: #3b6fd9; }
+.power-level-high .power-hero-level-value { color: #1d4ed8; }
+
+.power-level-mid {
+  border-color: #a894f0;
+  background: linear-gradient(145deg, #f6f2ff 0%, #e5dbff 100%);
+}
+.power-level-mid .power-hero-level-label { color: #6b4ee6; }
+.power-level-mid .power-hero-level-value { color: #5b3fd4; }
+
+.power-level-base {
+  border-color: #7bc995;
+  background: linear-gradient(145deg, #f0faf3 0%, #d7f0df 100%);
+}
+.power-level-base .power-hero-level-label { color: #2e7d32; }
+.power-level-base .power-hero-level-value { color: #1b6b32; }
+
+.power-level-low {
+  border-color: #c5ccd8;
+  background: linear-gradient(145deg, #f8fafc 0%, #eef2f7 100%);
+}
+.power-level-low .power-hero-level-label { color: #6b7280; }
+.power-level-low .power-hero-level-value { color: #4b5563; }
+
+.power-level-empty {
+  border-color: #e4e7ed;
+  background: #f5f7fa;
+}
+.power-level-empty .power-hero-level-value {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #909399;
+}
+
+.power-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+}
+
+.power-metric-item {
+  padding: 0.55rem 0.45rem;
+  border-radius: 8px;
+  background: #f7f9fc;
+  border: 1px solid #e8edf5;
+  text-align: center;
+}
+
+.power-metric-label {
+  display: block;
+  font-size: 0.68rem;
+  color: #909399;
+  line-height: 1.3;
+}
+
+.power-metric-value {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #303133;
+  line-height: 1.2;
+}
+
+.power-formula-toggle {
+  display: block;
+  width: 100%;
+  margin-top: 0.75rem;
+  padding: 0.45rem 0;
+  border: none;
+  background: none;
+  color: #409eff;
+  font-size: 0.8rem;
+  text-align: center;
+  cursor: pointer;
+}
+
+.match-filters {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 0.85rem;
+}
+
+.match-filter-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.match-filter-hint {
+  margin: -0.45rem 0 0.75rem;
+  font-size: 0.75rem;
+  color: #8a97ab;
+  line-height: 1.45;
+}
+
+.match-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.match-item {
+  border-radius: 12px;
+  border: 1px solid #e8edf5;
+  background: #fafbfd;
+  overflow: hidden;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.match-item.expanded {
+  border-color: #b3d4ff;
+  box-shadow: 0 4px 12px rgba(64, 158, 255, 0.1);
+}
+
+.match-item-main {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  width: 100%;
+  padding: 0.75rem 0.85rem;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.match-item-rank {
+  flex-shrink: 0;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 10px;
+  background: #eef2f8;
+  color: #5f6c80;
+  font-size: 0.8rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.match-item-rank.top3 {
+  background: linear-gradient(135deg, #ffe08a 0%, #f5a623 100%);
+  color: #5a3e00;
+}
+
+.match-item-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.match-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.match-item-row-sub {
+  margin-top: 0.35rem;
+}
+
+.match-item-map {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #1f2d3d;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.match-item-time {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  color: #909399;
+}
+
+.match-item-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.match-tag {
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid #e4eaf3;
+  font-size: 0.68rem;
+  color: #607086;
+  line-height: 1.3;
+}
+
+.match-item-metrics {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.45rem;
+}
+
+.match-metric {
+  padding: 0.18rem 0.45rem;
+  border-radius: 8px;
+  background: #fff;
+  border: 1px solid #e4eaf3;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #303133;
+  line-height: 1.2;
+}
+
+.match-metric em {
+  margin-right: 0.15rem;
+  font-style: normal;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: #909399;
+}
+
+.match-item-chevron {
+  flex-shrink: 0;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-right: 2px solid #b8c2d1;
+  border-bottom: 2px solid #b8c2d1;
+  transform: rotate(45deg);
+  transition: transform 0.2s ease, border-color 0.2s ease;
+  margin-right: 0.15rem;
+}
+
+.match-item.expanded .match-item-chevron {
+  transform: rotate(-135deg);
+  border-color: #409eff;
+  margin-top: 0.2rem;
+}
+
+.match-item-detail {
+  border-top: 1px solid #eef2f8;
+  padding: 0.65rem 0.85rem 0.75rem;
+  background: #fff;
+}
+
+.match-detail-title {
+  margin-bottom: 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #909399;
+}
+
+.match-member-table {
+  width: 100%;
+}
+
+.match-member-head,
+.match-member-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2rem 2rem 3.25rem;
+  align-items: center;
+  column-gap: 0.5rem;
+}
+
+.match-member-head {
+  padding: 0.15rem 0 0.45rem;
+  border-bottom: 1px solid #eef2f8;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #909399;
+}
+
+.match-member-row {
+  padding: 0.42rem 0;
+  font-size: 0.78rem;
+  color: #606266;
+}
+
+.match-member-row + .match-member-row {
+  border-top: 1px dashed #eef2f8;
+}
+
+.match-member-col.name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.match-member-col.stat {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: #303133;
+}
+
+.match-member-head .match-member-col.stat {
+  font-weight: 600;
+  color: #909399;
+}
+
+.match-member-col.damage {
+  min-width: 3.25rem;
+}
+
+.match-list-empty {
+  margin: 0;
+  padding: 1.5rem 0.75rem;
+  text-align: center;
+  font-size: 0.85rem;
+  color: #909399;
+  background: #f7f9fc;
+  border-radius: 10px;
+}
+
+.match-pagination {
+  display: flex;
+  justify-content: center;
+  margin-top: 0.85rem;
+}
+
+.match-pagination :deep(.el-pagination) {
+  flex-wrap: wrap;
+  justify-content: center;
+  row-gap: 0.5rem;
+}
+
 .panel-section {
   display: flex;
   flex-direction: column;
@@ -1536,7 +2541,13 @@ onMounted(async () => {
 .overview-toggle {
   display: flex;
   gap: 0.6rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+}
+
+.overview-toggle .el-button {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
 }
 
 .power-card {
@@ -1877,6 +2888,19 @@ onMounted(async () => {
   margin: 0 auto 0.8rem;
 }
 
+.skeleton-line-left {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.skeleton-line-title.skeleton-line-left {
+  margin: 0 0 0.8rem;
+}
+
+.skeleton-btn-left {
+  margin: 0.6rem 0 0;
+}
+
 .skeleton-line-short {
   width: 72%;
 }
@@ -1929,30 +2953,6 @@ onMounted(async () => {
 
 .ring-text-large .ring-value {
   font-size: 1.2rem;
-}
-
-@media (max-width: 1024px) {
-  .hero-content {
-    grid-template-columns: 1fr;
-  }
-
-  .kpi-row {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 768px) {
-  .hero-left {
-    min-height: 260px;
-  }
-
-  .hero-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .kpi-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 </style>
