@@ -631,13 +631,13 @@ class UserController {
         fetcher: async () => {
           const raw = season
             ? await getMatchesBySeason(binding.platform, binding.playerId, season, mode, page, pageSize)
-            : await getRecentMatches(binding.platform, binding.playerId, page, pageSize);
+            : await getRecentMatches(binding.platform, binding.playerId, page, pageSize, mode);
           let list = raw.list || [];
           if (mode === 'custom') {
             list = list.filter((item) => item.isCustomMatch || String(item.matchType || '').toLowerCase() === 'custom');
           }
           return {
-            total: raw.total,
+            total: (mode === 'custom') ? list.length : raw.total,
             page,
             pageSize,
             list

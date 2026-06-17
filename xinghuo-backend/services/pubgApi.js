@@ -254,21 +254,41 @@ function parseMatchDetailWithTeam(matchData, playerId) {
   };
 }
 
-async function getRecentMatches(platform, playerId, page = 1, pageSize = 10) {
+function normalizeMode(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function matchGameMode(modeValue, targetMode) {
+  const gm = normalizeMode(modeValue);
+  if (!gm) return false;
+  if (targetMode === 'solo') return gm === 'solo' || gm.startsWith('solo-');
+  if (targetMode === 'duo') return gm === 'duo' || gm.startsWith('duo-');
+  if (targetMode === 'squad') return gm === 'squad' || gm.startsWith('squad-');
+  return true;
+}
+
+async function getRecentMatches(platform, playerId, page = 1, pageSize = 10, mode = '') {
   const player = await getPlayerWithRelationships(platform, playerId);
   const matchRefs = player?.relationships?.matches?.data || [];
-  const start = Math.max(0, (page - 1) * pageSize);
-  const end = Math.min(matchRefs.length, start + pageSize);
-  const selected = matchRefs.slice(start, end);
 
-  const parsedList = await mapWithConcurrency(selected, async (ref) => {
+  const parsedList = await mapWithConcurrency(matchRefs, async (ref) => {
     const matchData = await getMatchById(platform, ref.id);
     return parsePlayerStatsFromMatch(matchData, playerId);
   }, 4);
-  const list = parsedList.filter(Boolean);
+  let list = parsedList.filter(Boolean);
+
+  const normalizedMode = normalizeMode(mode);
+  if (['solo', 'duo', 'squad'].includes(normalizedMode)) {
+    list = list.filter((item) => matchGameMode(item?.gameMode, normalizedMode));
+  }
+
+  const total = list.length;
+  const start = Math.max(0, (page - 1) * pageSize);
+  const end = Math.min(total, start + pageSize);
+  list = list.slice(start, end);
 
   return {
-    total: matchRefs.length,
+    total,
     page,
     pageSize,
     list

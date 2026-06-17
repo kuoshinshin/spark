@@ -23,6 +23,9 @@ const syncNavbarHeight = () => {
 }
 
 const activeMenu = computed(() => route.path)
+const appToneClass = computed(() => ({
+  'app-profile-tone': route.name === 'profile'
+}))
 
 const isAdmin = computed(() => auth.isAdmin)
 
@@ -78,7 +81,7 @@ watch(
 </script>
 
 <template>
-  <div ref="appRef" class="app">
+  <div ref="appRef" class="app" :class="appToneClass">
     <header ref="navbarRef" class="navbar">
       <div class="container">
         <div class="navbar-content">
@@ -250,6 +253,40 @@ watch(
   text-align: center;
   font-size: 0.75rem;
   color: #86868b;
+}
+
+.app-profile-tone {
+  --page-body-pt: 0;
+  --page-body-pb: 0;
+}
+
+.app-profile-tone .navbar {
+  background: rgba(255, 255, 255, 0.86);
+  border-bottom: 1px solid #e5e5ea;
+  box-shadow: 0 4px 18px rgba(15, 23, 42, 0.04);
+}
+
+.app-profile-tone .page-content {
+  background: #f5f5f7;
+}
+
+.app-profile-tone .page-body {
+  padding-top: 0;
+}
+
+.app-profile-tone .footer {
+  margin-top: 0;
+  background: #f5f5f7;
+}
+
+.app-profile-tone .logo h1,
+.app-profile-tone :deep(.el-menu-item) {
+  color: #1d1d1f !important;
+}
+
+.app-profile-tone :deep(.el-menu-item:hover),
+.app-profile-tone :deep(.el-menu-item.is-active) {
+  color: #000000 !important;
 }
 
 @media (max-width: 768px) {

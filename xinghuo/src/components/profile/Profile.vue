@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { userApi } from '../../services/api'
 import { DEFAULT_AVATAR, normalizeAvatar, avatarDisplayUrl } from '../../utils/avatar'
@@ -50,7 +50,16 @@ const overviewType = ref('normal')
 const cupHistory = ref(null)
 const cupHistoryLoading = ref(false)
 const expandedMobileMatchId = ref(null)
-const showPowerFormula = ref(false)
+const powerFormulaDialogVisible = ref(false)
+const powerRankPreviewList = [
+  { key: 'e', level: 'E', desc: '新火初燃', range: '< 350' },
+  { key: 'd', level: 'D', desc: '基础磨炼', range: '350 - 429' },
+  { key: 'c', level: 'C', desc: '潜力成长', range: '430 - 519' },
+  { key: 'b', level: 'B', desc: '进阶战士', range: '520 - 619' },
+  { key: 'a', level: 'A', desc: '稳定强者', range: '620 - 779' },
+  { key: 's', level: 'S', desc: '顶尖高手', range: '780 - 919' },
+  { key: 'demon-s', level: '魔王S', desc: '魔王降临', range: '>= 920' }
+]
 const getOverviewByType = (stats, type) => {
   if (!stats) return null
   const empty = { roundsPlayed: 0, wins: 0, kills: 0, kdRatio: 0, winRate: 0 }
@@ -66,6 +75,30 @@ const pubgPowerTone = computed(() => {
   if (score >= 650) return 'mid'
   if (score >= 520) return 'base'
   return 'low'
+})
+const pubgPowerLevelKey = computed(() => {
+  const level = String(pubgPower.value?.level || '').trim().toUpperCase()
+  if (level.includes('魔王')) return 'demon-s'
+  if (level === 'S') return 's'
+  if (level === 'A') return 'a'
+  if (level === 'B') return 'b'
+  if (level === 'C') return 'c'
+  if (level === 'D') return 'd'
+  if (level === 'E') return 'e'
+  return 'empty'
+})
+const pubgPowerLevelText = computed(() => {
+  const map = {
+    'demon-s': '魔王降临',
+    s: '顶尖高手',
+    a: '稳定强者',
+    b: '进阶战士',
+    c: '潜力成长',
+    d: '基础磨炼',
+    e: '新火初燃',
+    empty: '暂无评级'
+  }
+  return map[pubgPowerLevelKey.value] || map.empty
 })
 const pubgVisual = computed(() => {
   const stats = currentOverviewStats.value
@@ -176,6 +209,15 @@ const formatDamage = (value) => {
   const num = Number(value)
   if (!Number.isFinite(num)) return '--'
   return num.toFixed(1)
+}
+
+const formatSeconds = (value) => {
+  const sec = Math.max(0, Math.floor(Number(value) || 0))
+  const h = Math.floor(sec / 3600)
+  const m = Math.floor((sec % 3600) / 60)
+  const s = sec % 60
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  return `${m}:${String(s).padStart(2, '0')}`
 }
 
 const toggleMobileMatch = async (row) => {
@@ -579,6 +621,223 @@ const handleExpandChange = async (row, expandedRows) => {
 
 const avatarUploadRef = ref(null)
 const avatarUploading = ref(false)
+const avatarCropDialogVisible = ref(false)
+const avatarCropImageUrl = ref('')
+const avatarCropFileName = ref('avatar')
+const avatarCropScale = ref(1)
+const avatarCropOffset = ref({ x: 0, y: 0 })
+const avatarCropImageMeta = ref({ width: 0, height: 0 })
+const avatarCropDragging = ref({
+  active: false,
+  pointerId: null,
+  startX: 0,
+  startY: 0,
+  baseX: 0,
+  baseY: 0
+})
+const AVATAR_CROP_SIZE = 260
+const AVATAR_OUTPUT_SIZE = 512
+
+const avatarCropMetrics = computed(() => {
+  const { width, height } = avatarCropImageMeta.value
+  if (!width || !height) {
+    return {
+      scale: 1,
+      drawWidth: AVATAR_CROP_SIZE,
+      drawHeight: AVATAR_CROP_SIZE,
+      maxX: 0,
+      maxY: 0
+    }
+  }
+
+  const scale = (AVATAR_CROP_SIZE / Math.min(width, height)) * avatarCropScale.value
+  const drawWidth = width * scale
+  const drawHeight = height * scale
+
+  return {
+    scale,
+    drawWidth,
+    drawHeight,
+    maxX: Math.max(0, (drawWidth - AVATAR_CROP_SIZE) / 2),
+    maxY: Math.max(0, (drawHeight - AVATAR_CROP_SIZE) / 2)
+  }
+})
+
+const avatarCropImageStyle = computed(() => {
+  const metrics = avatarCropMetrics.value
+  const { x, y } = avatarCropOffset.value
+  return {
+    width: `${metrics.drawWidth}px`,
+    height: `${metrics.drawHeight}px`,
+    transform: `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`
+  }
+})
+const avatarCropZoomLabel = computed(() => `${Math.round(avatarCropScale.value * 100)}%`)
+
+const clampAvatarCropOffset = (x, y) => {
+  const { maxX, maxY } = avatarCropMetrics.value
+  return {
+    x: Math.min(maxX, Math.max(-maxX, x)),
+    y: Math.min(maxY, Math.max(-maxY, y))
+  }
+}
+
+const resetAvatarCropper = () => {
+  if (avatarCropImageUrl.value) {
+    URL.revokeObjectURL(avatarCropImageUrl.value)
+  }
+  avatarCropImageUrl.value = ''
+  avatarCropFileName.value = 'avatar'
+  avatarCropScale.value = 1
+  avatarCropOffset.value = { x: 0, y: 0 }
+  avatarCropImageMeta.value = { width: 0, height: 0 }
+  avatarCropDragging.value = {
+    active: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    baseX: 0,
+    baseY: 0
+  }
+}
+
+const loadImage = (src) => new Promise((resolve, reject) => {
+  const image = new Image()
+  image.onload = () => resolve(image)
+  image.onerror = () => reject(new Error('图片读取失败，请重新选择'))
+  image.src = src
+})
+
+const openAvatarCropper = async (file) => {
+  if (!file) return
+  if (!file.type?.startsWith('image/')) {
+    ElMessage.warning('请选择图片文件')
+    return
+  }
+  if (file.size > 8 * 1024 * 1024) {
+    ElMessage.warning('图片不能超过 8MB')
+    return
+  }
+
+  resetAvatarCropper()
+  const objectUrl = URL.createObjectURL(file)
+  try {
+    const image = await loadImage(objectUrl)
+    avatarCropImageUrl.value = objectUrl
+    avatarCropFileName.value = file.name?.replace(/\.[^.]+$/, '') || 'avatar'
+    avatarCropImageMeta.value = {
+      width: image.naturalWidth || image.width,
+      height: image.naturalHeight || image.height
+    }
+    avatarCropScale.value = 1
+    avatarCropOffset.value = { x: 0, y: 0 }
+    avatarCropDialogVisible.value = true
+  } catch (error) {
+    URL.revokeObjectURL(objectUrl)
+    ElMessage.error(error.message || '图片读取失败，请重新选择')
+  }
+}
+
+const handleAvatarCropScaleChange = () => {
+  avatarCropOffset.value = clampAvatarCropOffset(
+    avatarCropOffset.value.x,
+    avatarCropOffset.value.y
+  )
+}
+
+const resetAvatarCropView = () => {
+  avatarCropScale.value = 1
+  avatarCropOffset.value = { x: 0, y: 0 }
+}
+
+const handleAvatarCropWheel = (event) => {
+  if (!avatarCropImageUrl.value) return
+  const nextScale = Number((avatarCropScale.value + (event.deltaY > 0 ? -0.08 : 0.08)).toFixed(2))
+  avatarCropScale.value = Math.min(3, Math.max(1, nextScale))
+  handleAvatarCropScaleChange()
+}
+
+const startAvatarCropDrag = (event) => {
+  if (!avatarCropImageUrl.value) return
+  event.preventDefault()
+  event.currentTarget?.setPointerCapture?.(event.pointerId)
+  avatarCropDragging.value = {
+    active: true,
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    baseX: avatarCropOffset.value.x,
+    baseY: avatarCropOffset.value.y
+  }
+}
+
+const moveAvatarCropDrag = (event) => {
+  const dragging = avatarCropDragging.value
+  if (!dragging.active || dragging.pointerId !== event.pointerId) return
+  const next = clampAvatarCropOffset(
+    dragging.baseX + event.clientX - dragging.startX,
+    dragging.baseY + event.clientY - dragging.startY
+  )
+  avatarCropOffset.value = next
+}
+
+const endAvatarCropDrag = (event) => {
+  const dragging = avatarCropDragging.value
+  if (!dragging.active || dragging.pointerId !== event.pointerId) return
+  event.currentTarget?.releasePointerCapture?.(event.pointerId)
+  avatarCropDragging.value = {
+    ...dragging,
+    active: false,
+    pointerId: null
+  }
+}
+
+const confirmAvatarCrop = async () => {
+  if (!avatarCropImageUrl.value || avatarUploading.value) return
+
+  try {
+    const image = await loadImage(avatarCropImageUrl.value)
+    const canvas = document.createElement('canvas')
+    canvas.width = AVATAR_OUTPUT_SIZE
+    canvas.height = AVATAR_OUTPUT_SIZE
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('当前浏览器不支持头像裁剪')
+
+    const metrics = avatarCropMetrics.value
+    const { x, y } = avatarCropOffset.value
+    const left = (AVATAR_CROP_SIZE - metrics.drawWidth) / 2 + x
+    const top = (AVATAR_CROP_SIZE - metrics.drawHeight) / 2 + y
+    const sourceX = Math.max(0, -left / metrics.scale)
+    const sourceY = Math.max(0, -top / metrics.scale)
+    const sourceSize = AVATAR_CROP_SIZE / metrics.scale
+
+    context.drawImage(
+      image,
+      sourceX,
+      sourceY,
+      sourceSize,
+      sourceSize,
+      0,
+      0,
+      AVATAR_OUTPUT_SIZE,
+      AVATAR_OUTPUT_SIZE
+    )
+
+    const blob = await new Promise((resolve) => {
+      canvas.toBlob(resolve, 'image/jpeg', 0.9)
+    })
+    if (!blob) throw new Error('头像裁剪失败，请重试')
+
+    const croppedFile = new File([blob], `${avatarCropFileName.value}-cropped.jpg`, {
+      type: 'image/jpeg'
+    })
+    await uploadAvatarFile(croppedFile)
+    avatarCropDialogVisible.value = false
+  } catch (error) {
+    console.error('裁剪头像失败:', error)
+    ElMessage.error(error.message || '裁剪头像失败，请重试')
+  }
+}
 
 const uploadAvatarFile = async (file) => {
   if (!file) return
@@ -608,13 +867,17 @@ const uploadAvatarFile = async (file) => {
 
 const onAvatarFileChange = (uploadFile) => {
   const raw = uploadFile?.raw
-  if (raw) uploadAvatarFile(raw)
+  if (raw) openAvatarCropper(raw)
   avatarUploadRef.value?.clearFiles()
 }
 // 生命周期钩子
 onMounted(async () => {
   await fetchUserData()
   fetchCupHistory()
+})
+
+onBeforeUnmount(() => {
+  resetAvatarCropper()
 })
 </script>
 
@@ -693,6 +956,8 @@ onMounted(async () => {
           <el-card shadow="hover" class="profile-info-card profile-info-section">
               <div class="profile-info">
                 <div class="profile-info-avatar">
+                <div class="profile-avatar-panel">
+                <div class="profile-avatar-kicker">MY PAGE</div>
                 <el-upload
                   ref="avatarUploadRef"
                   class="avatar-upload-trigger"
@@ -705,22 +970,27 @@ onMounted(async () => {
                 >
                   <template #trigger>
                     <div class="avatar">
-                      <el-avatar :src="avatarDisplayUrl(userData.avatar)" size="large"></el-avatar>
+                      <el-avatar class="profile-avatar-img" :src="avatarDisplayUrl(userData.avatar)"></el-avatar>
                       <div class="avatar-edit">
-                        <span>{{ avatarUploading ? '上传中…' : '更换头像' }}</span>
+                        <span>{{ avatarUploading ? '上传中…' : '裁剪头像' }}</span>
                       </div>
                     </div>
                   </template>
                 </el-upload>
+                <p class="profile-avatar-hint">点击头像上传，支持拖拽裁剪</p>
+                </div>
                 </div>
 
                 <div class="profile-info-content">
                 <div class="user-details" v-if="!isEditing">
+                  <span class="profile-kicker">个人资料</span>
                   <h2>{{ userData.username }}</h2>
-                  <p class="user-real-name" v-if="userData.real_name">姓名: {{ userData.real_name }}</p>
-                  <p class="user-account">账号: {{ userData.account }}</p>
-                  <p class="user-phone" v-if="userData.phone">电话: {{ userData.phone }}</p>
-                  <p class="user-address" v-if="userData.address">地址: {{ userData.address }}</p>
+                  <div class="user-meta-list">
+                    <p class="user-account"><span class="meta-label">账号</span><strong>{{ userData.account }}</strong></p>
+                    <p class="user-real-name" v-if="userData.real_name"><span class="meta-label">姓名</span><strong>{{ userData.real_name }}</strong></p>
+                    <p class="user-phone" v-if="userData.phone"><span class="meta-label">电话</span><strong>{{ userData.phone }}</strong></p>
+                    <p class="user-address" v-if="userData.address"><span class="meta-label">地址</span><strong>{{ userData.address }}</strong></p>
+                  </div>
                   <div class="user-actions">
                     <el-button type="primary" @click="isEditing = true">编辑资料</el-button>
                   </div>
@@ -753,250 +1023,71 @@ onMounted(async () => {
               </div>
           </el-card>
 
-          <div class="pubg-content">
-          <el-card v-if="!isPubgBound" shadow="hover" class="pubg-card pubg-card-bind">
-            <h3 class="pubg-card-title">账号绑定</h3>
-            <p class="pubg-card-desc">绑定游戏账号后可查看战力值、统计总览与对局记录。</p>
-            <el-form class="hero-bind-form" label-position="top" @submit.prevent="handleBindPubg">
-              <el-form-item label="平台">
-                <el-select v-model="pubgBindingForm.platform" style="width: 100%">
-                  <el-option label="Steam" value="steam" />
-                  <el-option label="Kakao" value="kakao" />
-                  <el-option label="Xbox" value="xbox" />
-                  <el-option label="PlayStation" value="psn" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="玩家昵称">
-                <el-input v-model="pubgBindingForm.playerName" placeholder="请输入游戏内昵称" />
-              </el-form-item>
-              <el-button type="primary" :loading="pubgLoading" @click="handleBindPubg">绑定并同步战绩</el-button>
-            </el-form>
-          </el-card>
-
-          <template v-else>
-            <el-card shadow="hover" class="pubg-card pubg-card-bind">
-              <h3 class="pubg-card-title">账号绑定</h3>
-              <div class="panel-bind-info">
-                <div class="bind-meta">
-                  <p>已绑定账号：{{ userData.pubgBinding.playerName }}</p>
-                  <p>平台：{{ userData.pubgBinding.platform.toUpperCase() }}</p>
-                </div>
-                <div class="hero-actions hero-actions-compact">
-                  <el-button plain :loading="isRefreshingStats" @click="handleRefreshPubgStats">同步战绩</el-button>
-                  <el-button type="warning" plain @click="startRebind">换绑</el-button>
-                  <el-button type="danger" plain :loading="pubgLoading" @click="handleUnbindPubg">解绑</el-button>
-                </div>
-              </div>
-              <div v-if="isRebinding" class="hero-rebind">
-                <el-form label-position="top" @submit.prevent="handleBindPubg">
-                  <el-form-item label="新平台">
-                    <el-select v-model="pubgBindingForm.platform" style="width: 100%">
-                      <el-option label="Steam" value="steam" />
-                      <el-option label="Kakao" value="kakao" />
-                      <el-option label="Xbox" value="xbox" />
-                      <el-option label="PlayStation" value="psn" />
-                    </el-select>
-                  </el-form-item>
-                  <el-form-item label="新玩家昵称">
-                    <el-input v-model="pubgBindingForm.playerName" placeholder="请输入新的游戏内昵称" />
-                  </el-form-item>
-                  <div class="hero-actions">
-                    <el-button type="warning" :loading="pubgLoading" @click="handleBindPubg">确认换绑</el-button>
-                    <el-button @click="isRebinding = false">取消</el-button>
-                  </div>
-                </el-form>
-              </div>
-            </el-card>
-
-            <el-card shadow="hover" class="pubg-card pubg-card-power">
-              <h3 class="pubg-card-title">星火战力值</h3>
-              <p class="power-subtitle">最近 {{ pubgPower?.requestedMatches || 200 }} 场竞技模式综合评分</p>
-              <div class="power-hero" :class="`power-tone-${pubgPowerTone}`" v-loading="pubgPowerLoading">
-                <div class="power-hero-score">
-                  <span class="power-score-num">{{ pubgPower?.score ?? '--' }}</span>
-                  <span class="power-score-label">战力值</span>
-                </div>
-                <div
-                  class="power-hero-level"
-                  :class="pubgPower?.level ? `power-level-${pubgPowerTone}` : 'power-level-empty'"
-                >
-                  <span class="power-hero-level-label">评级</span>
-                  <strong class="power-hero-level-value">{{ pubgPower?.level || '暂无' }}</strong>
-                </div>
-              </div>
-              <div class="power-metrics" v-if="pubgPower">
-                <div class="power-metric-item"><span class="power-metric-label">KD</span><span class="power-metric-value">{{ pubgPower.kd }}</span></div>
-                <div class="power-metric-item"><span class="power-metric-label">场均伤害</span><span class="power-metric-value">{{ pubgPower.avgDamage }}</span></div>
-                <div class="power-metric-item"><span class="power-metric-label">平均排名</span><span class="power-metric-value">{{ pubgPower.avgRank }}</span></div>
-                <div class="power-metric-item"><span class="power-metric-label">样本场次</span><span class="power-metric-value">{{ pubgPower.matchesAnalyzed }}</span></div>
-              </div>
-              <button
-                v-if="pubgPower"
-                type="button"
-                class="power-formula-toggle"
-                @click="showPowerFormula = !showPowerFormula"
+          <el-dialog
+            v-model="avatarCropDialogVisible"
+            title="裁剪头像"
+            class="avatar-crop-dialog"
+            width="420px"
+            :close-on-click-modal="!avatarUploading"
+            :close-on-press-escape="!avatarUploading"
+            :show-close="!avatarUploading"
+            @closed="resetAvatarCropper"
+          >
+            <div class="avatar-cropper">
+              <div
+                class="avatar-crop-stage"
+                @pointerdown="startAvatarCropDrag"
+                @pointermove="moveAvatarCropDrag"
+                @pointerup="endAvatarCropDrag"
+                @pointercancel="endAvatarCropDrag"
+                @wheel.prevent="handleAvatarCropWheel"
               >
-                {{ showPowerFormula ? '收起计算说明' : '查看计算说明' }}
-              </button>
-              <div class="power-formula-hint" v-if="pubgPower && showPowerFormula">
-                <div class="power-formula-title">计算说明</div>
-                <div class="power-formula-line">战力值 = round((KD因子 × 0.45 + 伤害因子 × 0.30 + 排名因子 × 0.25) × 1000)</div>
-                <ul class="power-formula-list">
-                  <li>KD因子 = min(KD, 5) / 5</li>
-                  <li>伤害因子 = min(场均伤害, 600) / 600</li>
-                  <li>排名因子 = clamp((101 - 平均排名) / 100, 0, 1)</li>
-                </ul>
-                <div class="power-level-map">
-                  <span>评级区间：</span>
-                  <span>魔王S(≥920)</span>
-                  <span>S(≥780)</span>
-                  <span>A(≥620)</span>
-                  <span>B(≥520)</span>
-                  <span>C(≥430)</span>
-                  <span>D(≥350)</span>
-                  <span>E(&lt;350)</span>
-                </div>
+                <img
+                  v-if="avatarCropImageUrl"
+                  class="avatar-crop-image"
+                  :src="avatarCropImageUrl"
+                  :style="avatarCropImageStyle"
+                  draggable="false"
+                  alt="待裁剪头像"
+                />
+                <div class="avatar-crop-mask"></div>
               </div>
-            </el-card>
-
-            <el-card shadow="hover" class="pubg-card pubg-card-stats">
-              <div class="stats-card-head">
-                <h3 class="pubg-card-title">统计总览</h3>
-                <div class="overview-toggle stats-type-toggle">
-                  <el-button :type="overviewType === 'normal' ? 'primary' : 'default'" plain @click="handleOverviewTypeChange('normal')">
-                    匹配总览
-                  </el-button>
-                  <el-button :type="overviewType === 'ranked' ? 'primary' : 'default'" plain @click="handleOverviewTypeChange('ranked')">
-                    竞技总览
-                  </el-button>
+              <div class="avatar-crop-toolbar">
+                <div class="avatar-crop-toolbar-head">
+                  <span>缩放</span>
+                  <strong>{{ avatarCropZoomLabel }}</strong>
                 </div>
-              </div>
-              <p class="stats-kd-hint">KD = 总击杀 / 总失败场次；失败为 0 时按总击杀计</p>
-              <div v-if="pubgDisplay" class="stats-kpi-grid">
-                <div class="stats-kpi-item">
-                  <div class="stats-kpi-label">总场次</div>
-                  <div class="stats-kpi-value">{{ pubgDisplay.roundsPlayed }}</div>
-                </div>
-                <div class="stats-kpi-item">
-                  <div class="stats-kpi-label">胜场</div>
-                  <div class="stats-kpi-value">{{ pubgDisplay.wins }}</div>
-                </div>
-                <div class="stats-kpi-item">
-                  <div class="stats-kpi-label">吃鸡率</div>
-                  <div class="stats-kpi-value">{{ pubgDisplay.winRate }}%</div>
-                </div>
-                <div class="stats-kpi-item">
-                  <div class="stats-kpi-label">总击杀</div>
-                  <div class="stats-kpi-value">{{ pubgDisplay.kills }}</div>
-                </div>
-                <div class="stats-kpi-item">
-                  <div class="stats-kpi-label">KD</div>
-                  <div class="stats-kpi-value">{{ pubgDisplay.kdRatio }}</div>
-                </div>
-                <div class="stats-kpi-item">
-                  <div class="stats-kpi-label">场均击杀</div>
-                  <div class="stats-kpi-value">{{ pubgDisplay.killsPerMatch }}</div>
-                </div>
-              </div>
-              <div v-else class="stats-empty">暂无统计数据，点击「同步战绩」获取最新数据</div>
-            </el-card>
-
-            <el-card shadow="hover" class="pubg-card pubg-card-matches">
-              <h3 class="pubg-card-title">游戏对局</h3>
-              <div class="match-filters">
-                <el-select
-                  v-model="matchQuery.mode"
-                  clearable
-                  placeholder="全部模式"
-                  class="match-filter-select"
-                >
-                  <el-option label="Solo" value="solo" />
-                  <el-option label="Duo" value="duo" />
-                  <el-option label="Squad" value="squad" />
-                  <el-option label="自定义" value="custom" />
-                </el-select>
-                <el-button type="primary" plain :loading="matchesLoading" @click="applyMatchFilter">查询</el-button>
-              </div>
-              <p v-if="seasonFilterNote" class="match-filter-hint">{{ seasonFilterNote }}</p>
-
-              <div class="match-list" v-loading="matchesLoading">
-                <article
-                  v-for="row in pubgMatches"
-                  :key="row.matchId"
-                  class="match-item"
-                  :class="{ expanded: expandedMobileMatchId === row.matchId }"
-                >
-                  <button type="button" class="match-item-main" @click="toggleMobileMatch(row)">
-                    <div class="match-item-rank" :class="{ top3: row.rank <= 3 }">#{{ row.rank }}</div>
-                    <div class="match-item-body">
-                      <div class="match-item-row">
-                        <span class="match-item-map">{{ formatMapName(row.mapName) }}</span>
-                        <span class="match-item-time">{{ formatMatchDateShort(row.createdAt) }}</span>
-                      </div>
-                      <div class="match-item-row match-item-row-sub">
-                        <span class="match-item-tags">
-                          <span class="match-tag">{{ formatModeName(row.gameMode) }}</span>
-                          <span class="match-tag">{{ formatMatchType(row) }}</span>
-                        </span>
-                        <span class="match-item-metrics">
-                          <span class="match-metric"><em>K</em>{{ row.kills }}</span>
-                          <span class="match-metric"><em>伤</em>{{ formatDamage(row.damageDealt) }}</span>
-                        </span>
-                      </div>
-                    </div>
-                    <span class="match-item-chevron" aria-hidden="true"></span>
-                  </button>
-                  <div
-                    v-if="expandedMobileMatchId === row.matchId"
-                    class="match-item-detail"
-                    v-loading="expandedRowLoadingMap[row.matchId]"
-                  >
-                    <div class="match-detail-title">队友数据</div>
-                    <template v-if="matchDetailMap[row.matchId]?.teamMembers?.length">
-                      <div class="match-member-table">
-                        <div class="match-member-head">
-                          <span class="match-member-col name">成员</span>
-                          <span class="match-member-col stat">K</span>
-                          <span class="match-member-col stat">A</span>
-                          <span class="match-member-col stat damage">伤害</span>
-                        </div>
-                        <div
-                          v-for="member in matchDetailMap[row.matchId].teamMembers"
-                          :key="member.name"
-                          class="match-member-row"
-                        >
-                          <span class="match-member-col name" :class="{ 'self-tag': member.isSelf }">
-                            {{ member.name }}{{ member.isSelf ? '（我）' : '' }}
-                          </span>
-                          <span class="match-member-col stat">{{ member.kills ?? 0 }}</span>
-                          <span class="match-member-col stat">{{ member.assists ?? 0 }}</span>
-                          <span class="match-member-col stat damage">{{ formatDamage(member.damageDealt) }}</span>
-                        </div>
-                      </div>
-                    </template>
-                    <p v-else-if="!expandedRowLoadingMap[row.matchId]" class="detail-placeholder">暂无队友数据</p>
-                  </div>
-                </article>
-                <p v-if="!matchesLoading && !pubgMatches.length" class="match-list-empty">暂无对局记录</p>
-              </div>
-
-              <div v-if="pubgMatchesTotal > matchQuery.pageSize" class="match-pagination">
-                <el-pagination
-                  background
-                  layout="prev, pager, next"
-                  :current-page="matchQuery.page"
-                  :page-size="matchQuery.pageSize"
-                  :total="pubgMatchesTotal"
-                  @current-change="handleMatchPageChange"
+                <el-slider
+                  v-model="avatarCropScale"
+                  :min="1"
+                  :max="3"
+                  :step="0.01"
+                  :show-tooltip="false"
+                  @input="handleAvatarCropScaleChange"
                 />
               </div>
-            </el-card>
-          </template>
-        </div>
+              <div class="avatar-crop-actions">
+                <el-button size="small" text :disabled="avatarUploading" @click="resetAvatarCropView">重置位置</el-button>
+                <span>拖动图片调整位置，圆形区域即最终头像范围。</span>
+              </div>
+            </div>
+            <template #footer>
+              <el-button :disabled="avatarUploading" @click="avatarCropDialogVisible = false">取消</el-button>
+              <el-button type="primary" :loading="avatarUploading" @click="confirmAvatarCrop">
+                保存头像
+              </el-button>
+            </template>
+          </el-dialog>
 
         <el-card shadow="hover" class="cup-history-card cup-history-section" v-loading="cupHistoryLoading">
-            <h3 class="cup-history-title">我的杯赛战绩</h3>
-            <p class="cup-history-subtitle">已结束杯赛中的参赛记录</p>
+            <span class="section-kicker">CUP HISTORY</span>
+            <div class="card-title-row cup-title-row">
+              <div class="card-heading-stack">
+                <h3 class="cup-history-title">杯赛战绩</h3>
+                <p class="cup-history-subtitle">已结束杯赛中的参赛记录</p>
+              </div>
+              <span class="status-pill">Archive</span>
+            </div>
 
             <template v-if="cupHistory?.summary?.seasonsPlayed">
               <div class="cup-summary-grid">
@@ -1050,6 +1141,329 @@ onMounted(async () => {
 
             <p v-else class="cup-history-empty">暂无已结束的杯赛参赛记录</p>
         </el-card>
+
+          <div class="pubg-content">
+          <el-card v-if="!isPubgBound" shadow="hover" class="pubg-card pubg-card-bind">
+            <span class="section-kicker">PUBG ACCOUNT</span>
+            <div class="card-heading-stack">
+              <h3 class="pubg-card-title">账号绑定</h3>
+              <p class="pubg-card-desc">绑定游戏账号后可查看战力值、统计总览与对局记录。</p>
+            </div>
+            <el-form class="hero-bind-form" label-position="top" @submit.prevent="handleBindPubg">
+              <el-form-item label="平台">
+                <el-select v-model="pubgBindingForm.platform" style="width: 100%">
+                  <el-option label="Steam" value="steam" />
+                  <el-option label="Kakao" value="kakao" />
+                  <el-option label="Xbox" value="xbox" />
+                  <el-option label="PlayStation" value="psn" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="玩家昵称">
+                <el-input v-model="pubgBindingForm.playerName" placeholder="请输入游戏内昵称" />
+              </el-form-item>
+              <el-button type="primary" :loading="pubgLoading" @click="handleBindPubg">绑定并同步战绩</el-button>
+            </el-form>
+          </el-card>
+
+          <template v-else>
+            <el-card shadow="hover" class="pubg-card pubg-card-bind">
+              <span class="section-kicker">PUBG ACCOUNT</span>
+              <div class="card-title-row">
+                <div class="card-heading-stack">
+                  <h3 class="pubg-card-title">账号绑定</h3>
+                  <p class="card-subcopy">同步 PUBG 数据后，战力、统计和对局记录会自动展示。</p>
+                </div>
+                <span class="status-pill status-pill-success">已绑定</span>
+              </div>
+              <div class="panel-bind-info panel-bind-info-compact">
+                <div class="bind-meta bind-meta-featured">
+                  <span class="bind-meta-label">当前游戏身份</span>
+                  <strong class="bind-player-name">{{ userData.pubgBinding.playerName }}</strong>
+                  <div class="bind-platform-line">
+                    <span class="platform-pill">{{ userData.pubgBinding.platform.toUpperCase() }}</span>
+                    <span class="bind-sync-note">可同步最新战绩</span>
+                  </div>
+                </div>
+                <div class="bind-action-row hero-actions hero-actions-compact">
+                  <el-button plain :loading="isRefreshingStats" @click="handleRefreshPubgStats">同步战绩</el-button>
+                  <el-button type="warning" plain @click="startRebind">换绑</el-button>
+                  <el-button type="danger" plain :loading="pubgLoading" @click="handleUnbindPubg">解绑</el-button>
+                </div>
+              </div>
+              <div v-if="isRebinding" class="hero-rebind">
+                <el-form label-position="top" @submit.prevent="handleBindPubg">
+                  <el-form-item label="新平台">
+                    <el-select v-model="pubgBindingForm.platform" style="width: 100%">
+                      <el-option label="Steam" value="steam" />
+                      <el-option label="Kakao" value="kakao" />
+                      <el-option label="Xbox" value="xbox" />
+                      <el-option label="PlayStation" value="psn" />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="新玩家昵称">
+                    <el-input v-model="pubgBindingForm.playerName" placeholder="请输入新的游戏内昵称" />
+                  </el-form-item>
+                  <div class="hero-actions">
+                    <el-button type="warning" :loading="pubgLoading" @click="handleBindPubg">确认换绑</el-button>
+                    <el-button @click="isRebinding = false">取消</el-button>
+                  </div>
+                </el-form>
+              </div>
+            </el-card>
+
+            <el-card shadow="hover" class="pubg-card pubg-card-power">
+              <span class="section-kicker">SPARK POWER</span>
+              <div class="card-title-row">
+                <div class="card-heading-stack">
+                  <h3 class="pubg-card-title">星火战力值</h3>
+                  <p class="power-subtitle">最近 {{ pubgPower?.requestedMatches || 200 }} 场竞技模式综合评分</p>
+                </div>
+                <span class="status-pill">Ranked</span>
+              </div>
+              <div class="power-hero" :class="`power-tone-${pubgPowerTone}`" v-loading="pubgPowerLoading">
+                <div class="power-hero-score">
+                  <span class="power-score-label">战力值</span>
+                  <span class="power-score-num">{{ pubgPower?.score ?? '--' }}</span>
+                  <span class="power-score-caption">综合评分</span>
+                </div>
+                <div
+                  class="power-hero-level"
+                  :class="`power-rank-${pubgPowerLevelKey}`"
+                >
+                  <span class="power-level-orbit"></span>
+                  <span class="power-hero-level-label">评级</span>
+                  <strong class="power-hero-level-value">{{ pubgPower?.level || '暂无' }}</strong>
+                  <span class="power-hero-level-desc">{{ pubgPowerLevelText }}</span>
+                </div>
+              </div>
+              <div class="power-metrics" v-if="pubgPower">
+                <div class="power-metric-item"><span class="power-metric-label">KD</span><span class="power-metric-value">{{ pubgPower.kd }}</span></div>
+                <div class="power-metric-item"><span class="power-metric-label">场均伤害</span><span class="power-metric-value">{{ pubgPower.avgDamage }}</span></div>
+                <div class="power-metric-item"><span class="power-metric-label">平均排名</span><span class="power-metric-value">{{ pubgPower.avgRank }}</span></div>
+                <div class="power-metric-item"><span class="power-metric-label">样本场次</span><span class="power-metric-value">{{ pubgPower.matchesAnalyzed }}</span></div>
+              </div>
+              <button
+                v-if="pubgPower"
+                type="button"
+                class="power-formula-toggle"
+                @click="powerFormulaDialogVisible = true"
+              >
+                查看计算说明
+              </button>
+            </el-card>
+
+            <el-dialog
+              v-model="powerFormulaDialogVisible"
+              title="星火战力值计算说明"
+              class="power-formula-dialog"
+              width="720px"
+            >
+              <div class="power-formula-modal">
+                <section class="power-formula-section">
+                  <span class="section-kicker">FORMULA</span>
+                  <h4>计算方式</h4>
+                  <p class="power-formula-equation">战力值 = round((KD因子 × 0.45 + 伤害因子 × 0.30 + 排名因子 × 0.25) × 1000)</p>
+                  <div class="power-factor-grid">
+                    <div class="power-factor-item">
+                      <span>KD 因子</span>
+                      <strong>min(KD, 5) / 5</strong>
+                    </div>
+                    <div class="power-factor-item">
+                      <span>伤害因子</span>
+                      <strong>min(场均伤害, 600) / 600</strong>
+                    </div>
+                    <div class="power-factor-item">
+                      <span>排名因子</span>
+                      <strong>clamp((101 - 平均排名) / 100, 0, 1)</strong>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="power-formula-section">
+                  <span class="section-kicker">RANK PREVIEW</span>
+                  <h4>评级图标预览</h4>
+                  <div class="power-rank-preview-grid">
+                    <div
+                      v-for="rank in powerRankPreviewList"
+                      :key="rank.key"
+                      class="power-rank-preview-card"
+                      :class="`power-rank-${rank.key}`"
+                    >
+                      <span class="power-level-orbit"></span>
+                      <span class="power-hero-level-label">{{ rank.range }}</span>
+                      <strong class="power-hero-level-value">{{ rank.level }}</strong>
+                      <span class="power-hero-level-desc">{{ rank.desc }}</span>
+                    </div>
+                  </div>
+                </section>
+              </div>
+              <template #footer>
+                <el-button type="primary" @click="powerFormulaDialogVisible = false">知道了</el-button>
+              </template>
+            </el-dialog>
+
+            <el-card shadow="hover" class="pubg-card pubg-card-stats">
+              <div class="stats-card-head">
+                <div class="card-heading-stack">
+                  <span class="section-kicker">OVERVIEW</span>
+                  <h3 class="pubg-card-title">统计总览</h3>
+                </div>
+                <div class="overview-toggle stats-type-toggle">
+                  <el-button :type="overviewType === 'normal' ? 'primary' : 'default'" plain @click="handleOverviewTypeChange('normal')">
+                    匹配总览
+                  </el-button>
+                  <el-button :type="overviewType === 'ranked' ? 'primary' : 'default'" plain @click="handleOverviewTypeChange('ranked')">
+                    竞技总览
+                  </el-button>
+                </div>
+              </div>
+              <p class="stats-kd-hint">KD = 总击杀 / 总失败场次；失败为 0 时按总击杀计</p>
+              <div v-if="pubgDisplay" class="stats-kpi-grid">
+                <div class="stats-kpi-item">
+                  <div class="stats-kpi-label">总场次</div>
+                  <div class="stats-kpi-value">{{ pubgDisplay.roundsPlayed }}</div>
+                  <div class="stats-kpi-foot">样本规模</div>
+                </div>
+                <div class="stats-kpi-item">
+                  <div class="stats-kpi-label">胜场</div>
+                  <div class="stats-kpi-value">{{ pubgDisplay.wins }}</div>
+                  <div class="stats-kpi-foot">吃鸡次数</div>
+                </div>
+                <div class="stats-kpi-item">
+                  <div class="stats-kpi-label">吃鸡率</div>
+                  <div class="stats-kpi-value">{{ pubgDisplay.winRate }}%</div>
+                  <div class="stats-kpi-foot">胜率表现</div>
+                </div>
+                <div class="stats-kpi-item">
+                  <div class="stats-kpi-label">总击杀</div>
+                  <div class="stats-kpi-value">{{ pubgDisplay.kills }}</div>
+                  <div class="stats-kpi-foot">进攻贡献</div>
+                </div>
+                <div class="stats-kpi-item">
+                  <div class="stats-kpi-label">KD</div>
+                  <div class="stats-kpi-value">{{ pubgDisplay.kdRatio }}</div>
+                  <div class="stats-kpi-foot">稳定性</div>
+                </div>
+                <div class="stats-kpi-item">
+                  <div class="stats-kpi-label">场均击杀</div>
+                  <div class="stats-kpi-value">{{ pubgDisplay.killsPerMatch }}</div>
+                  <div class="stats-kpi-foot">每局火力</div>
+                </div>
+              </div>
+              <div v-else class="stats-empty">暂无统计数据，点击「同步战绩」获取最新数据</div>
+            </el-card>
+
+            <el-card shadow="hover" class="pubg-card pubg-card-matches">
+              <div class="match-card-top">
+                <div class="card-heading-stack">
+                  <span class="section-kicker">MATCH LOG</span>
+                  <h3 class="pubg-card-title">游戏对局</h3>
+                  <p class="card-subcopy">基于 PUBG 官方字段：Win Place、K/A、Damage、Time Survived。</p>
+                </div>
+                <div class="match-count-pill">
+                  <strong>{{ pubgMatchesTotal }}</strong>
+                  <span>场记录</span>
+                </div>
+              </div>
+              <div class="match-filters">
+                <el-select
+                  v-model="matchQuery.mode"
+                  clearable
+                  placeholder="全部模式"
+                  class="match-filter-select"
+                >
+                  <el-option label="单排" value="solo" />
+                  <el-option label="双排" value="duo" />
+                  <el-option label="四排" value="squad" />
+                  <el-option label="自定义" value="custom" />
+                </el-select>
+                <el-button type="primary" plain :loading="matchesLoading" @click="applyMatchFilter">查询</el-button>
+              </div>
+              <p v-if="seasonFilterNote" class="match-filter-hint">{{ seasonFilterNote }}</p>
+
+              <div class="match-list" v-loading="matchesLoading">
+                <article
+                  v-for="row in pubgMatches"
+                  :key="row.matchId"
+                  class="match-item"
+                  :class="{ expanded: expandedMobileMatchId === row.matchId }"
+                >
+                  <button type="button" class="match-item-main" @click="toggleMobileMatch(row)">
+                    <div class="match-item-rank" :class="{ top3: row.rank <= 3 }">
+                      <span class="match-rank-num">#{{ row.rank }}</span>
+                      <span class="match-rank-label">Win Place</span>
+                    </div>
+                    <div class="match-item-body">
+                      <div class="match-item-row">
+                        <span class="match-item-map">{{ formatMapName(row.mapName) }}</span>
+                        <span class="match-item-time">{{ formatMatchDateShort(row.createdAt) }}</span>
+                      </div>
+                      <div class="match-item-row match-item-row-sub">
+                        <span class="match-item-tags">
+                          <span class="match-tag">{{ formatModeName(row.gameMode) }}</span>
+                          <span class="match-tag">{{ formatMatchType(row) }}</span>
+                        </span>
+                        <span class="match-item-metrics">
+                          <span class="match-metric"><em>K</em>{{ row.kills }}</span>
+                          <span class="match-metric"><em>A</em>{{ row.assists ?? 0 }}</span>
+                          <span class="match-metric"><em>DMG</em>{{ formatDamage(row.damageDealt) }}</span>
+                        </span>
+                      </div>
+                      <div class="match-item-row match-item-row-meta">
+                        <span class="match-item-meta">生存 {{ formatSeconds(row.timeSurvived) }}</span>
+                        <span class="match-item-meta">对局时长 {{ formatSeconds(row.duration) }}</span>
+                      </div>
+                    </div>
+                    <span class="match-item-chevron" aria-hidden="true"></span>
+                  </button>
+                  <div
+                    v-if="expandedMobileMatchId === row.matchId"
+                    class="match-item-detail"
+                    v-loading="expandedRowLoadingMap[row.matchId]"
+                  >
+                    <div class="match-detail-title">队友数据</div>
+                    <template v-if="matchDetailMap[row.matchId]?.teamMembers?.length">
+                      <div class="match-member-table">
+                        <div class="match-member-head">
+                          <span class="match-member-col name">成员</span>
+                          <span class="match-member-col stat">K</span>
+                          <span class="match-member-col stat">A</span>
+                          <span class="match-member-col stat damage">伤害</span>
+                        </div>
+                        <div
+                          v-for="member in matchDetailMap[row.matchId].teamMembers"
+                          :key="member.name"
+                          class="match-member-row"
+                        >
+                          <span class="match-member-col name" :class="{ 'self-tag': member.isSelf }">
+                            {{ member.name }}{{ member.isSelf ? '（我）' : '' }}
+                          </span>
+                          <span class="match-member-col stat">{{ member.kills ?? 0 }}</span>
+                          <span class="match-member-col stat">{{ member.assists ?? 0 }}</span>
+                          <span class="match-member-col stat damage">{{ formatDamage(member.damageDealt) }}</span>
+                        </div>
+                      </div>
+                    </template>
+                    <p v-else-if="!expandedRowLoadingMap[row.matchId]" class="detail-placeholder">暂无队友数据</p>
+                  </div>
+                </article>
+                <p v-if="!matchesLoading && !pubgMatches.length" class="match-list-empty">暂无对局记录</p>
+              </div>
+
+              <div v-if="pubgMatchesTotal > matchQuery.pageSize" class="match-pagination">
+                <el-pagination
+                  background
+                  layout="prev, pager, next"
+                  :current-page="matchQuery.page"
+                  :page-size="matchQuery.pageSize"
+                  :total="pubgMatchesTotal"
+                  @current-change="handleMatchPageChange"
+                />
+              </div>
+            </el-card>
+          </template>
+        </div>
+
       </div>
     </div>
   </div>
@@ -1124,10 +1538,35 @@ onMounted(async () => {
   border-radius: 14px;
 }
 
+.profile-info-card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(64, 158, 255, 0.12);
+  background:
+    radial-gradient(circle at 18% 0%, rgba(64, 158, 255, 0.12), transparent 34%),
+    linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
+}
+
+.profile-info-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 82% 18%, rgba(109, 93, 252, 0.09), transparent 32%),
+    linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(64, 158, 255, 0.05));
+  pointer-events: none;
+}
+
 .profile-info-card :deep(.el-card__body),
 .cup-history-card :deep(.el-card__body),
 .pubg-card :deep(.el-card__body) {
   padding: 1.25rem;
+}
+
+.profile-info-card :deep(.el-card__body) {
+  position: relative;
+  z-index: 1;
+  padding: 1.35rem;
 }
 
 .pubg-content {
@@ -1295,7 +1734,7 @@ onMounted(async () => {
   align-items: center;
   align-self: stretch;
   padding: 0.75rem 1rem;
-  border-right: 1px solid #f0f2f5;
+  border-right: 1px solid rgba(64, 158, 255, 0.12);
 }
 
 .profile-info-content {
@@ -1311,29 +1750,50 @@ onMounted(async () => {
   width: 100%;
 }
 
+.profile-avatar-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+}
 
+.profile-avatar-hint {
+  margin: 0;
+  font-size: 0.76rem;
+  color: #7c8aa0;
+  line-height: 1.4;
+  text-align: center;
+}
 
 .avatar {
   position: relative;
-  width: 80px;
-  height: 80px;
+  width: 116px;
+  height: 116px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: transform 0.3s ease;
+  transition: transform 0.22s ease, border-color 0.22s ease, box-shadow 0.22s ease;
   border-radius: 50%;
-  border: 2px solid #f0f0f0;
+  border: 3px solid rgba(255, 255, 255, 0.92);
+  background: linear-gradient(135deg, #eef5ff, #ffffff);
+  box-shadow: 0 12px 28px rgba(31, 78, 160, 0.14);
+  overflow: hidden;
 }
 
 .avatar:hover {
   transform: scale(1.03);
   border-color: #0071e3;
+  box-shadow: 0 16px 34px rgba(31, 78, 160, 0.22);
 }
 
-.avatar img {
-  width: 100%;
-  height: 100%;
+.avatar :deep(.profile-avatar-img) {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.avatar :deep(img) {
   object-fit: cover;
 }
 
@@ -1385,6 +1845,24 @@ onMounted(async () => {
   letter-spacing: 0.01em;
 }
 
+.user-meta-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0.2rem 0 0;
+}
+
+.user-meta-list p {
+  margin: 0;
+  padding: 0.32rem 0.58rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(210, 220, 235, 0.85);
+  color: #607086;
+  font-size: 0.8rem;
+  line-height: 1.3;
+}
+
 .user-real-name,
 .user-phone,
 .user-address {
@@ -1406,6 +1884,125 @@ onMounted(async () => {
   width: 100%;
   max-width: none;
   text-align: left;
+}
+
+.avatar-crop-dialog :deep(.el-dialog) {
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+.avatar-crop-dialog :deep(.el-dialog__body) {
+  padding-top: 0.5rem;
+}
+
+.avatar-cropper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.95rem;
+}
+
+.avatar-crop-stage {
+  position: relative;
+  width: 260px;
+  height: 260px;
+  border-radius: 18px;
+  overflow: hidden;
+  background:
+    linear-gradient(45deg, #eef2f7 25%, transparent 25%),
+    linear-gradient(-45deg, #eef2f7 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #eef2f7 75%),
+    linear-gradient(-45deg, transparent 75%, #eef2f7 75%);
+  background-color: #f8fafc;
+  background-size: 20px 20px;
+  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.25);
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+}
+
+.avatar-crop-stage:active {
+  cursor: grabbing;
+}
+
+.avatar-crop-image {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  max-width: none;
+  object-fit: fill;
+  user-select: none;
+  pointer-events: none;
+  transform-origin: center center;
+}
+
+.avatar-crop-mask {
+  position: absolute;
+  inset: 0;
+  border-radius: 18px;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.92);
+}
+
+.avatar-crop-mask::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 260px;
+  height: 260px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 999px rgba(15, 23, 42, 0.48),
+    0 0 0 2px #ffffff,
+    0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.avatar-crop-mask::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 260px;
+  height: 260px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background:
+    linear-gradient(to right, transparent 32.8%, rgba(255, 255, 255, 0.28) 33%, rgba(255, 255, 255, 0.28) 33.6%, transparent 33.8%, transparent 66.2%, rgba(255, 255, 255, 0.28) 66.4%, rgba(255, 255, 255, 0.28) 67%, transparent 67.2%),
+    linear-gradient(to bottom, transparent 32.8%, rgba(255, 255, 255, 0.28) 33%, rgba(255, 255, 255, 0.28) 33.6%, transparent 33.8%, transparent 66.2%, rgba(255, 255, 255, 0.28) 66.4%, rgba(255, 255, 255, 0.28) 67%, transparent 67.2%);
+}
+
+.avatar-crop-toolbar {
+  width: 100%;
+  max-width: 320px;
+}
+
+.avatar-crop-toolbar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.25rem;
+  font-size: 0.82rem;
+  color: #607086;
+}
+
+.avatar-crop-toolbar-head strong {
+  color: #1f2d3d;
+  font-size: 0.78rem;
+}
+
+.avatar-crop-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  max-width: 320px;
+  color: #8a97ab;
+  font-size: 0.76rem;
+  line-height: 1.45;
 }
 
 /* 响应式布局 */
@@ -1461,6 +2058,10 @@ onMounted(async () => {
     text-align: center;
   }
 
+  .user-meta-list {
+    justify-content: center;
+  }
+
   .user-actions {
     justify-content: center;
   }
@@ -1470,8 +2071,8 @@ onMounted(async () => {
   }
 
   .avatar {
-    width: 72px;
-    height: 72px;
+    width: 104px;
+    height: 104px;
   }
 
   .user-details h2 {
@@ -1562,6 +2163,29 @@ onMounted(async () => {
     padding-right: 0.35rem;
     font-size: 0.75rem;
   }
+
+  .avatar-crop-dialog :deep(.el-dialog) {
+    width: calc(100vw - 24px) !important;
+    max-width: 420px;
+  }
+
+  .avatar-crop-stage {
+    width: min(260px, calc(100vw - 72px));
+    height: min(260px, calc(100vw - 72px));
+  }
+
+  .avatar-crop-mask::before,
+  .avatar-crop-mask::after {
+    width: min(260px, calc(100vw - 72px));
+    height: min(260px, calc(100vw - 72px));
+  }
+
+  .avatar-crop-actions {
+    flex-direction: column;
+    align-items: center;
+    gap: 0.35rem;
+    text-align: center;
+  }
 }
 
 /* 深色模式优化 */
@@ -1571,6 +2195,17 @@ onMounted(async () => {
 
 .dark-mode .avatar:hover {
   border-color: #0071e3;
+}
+
+.dark-mode .profile-info-card {
+  border-color: rgba(64, 158, 255, 0.18);
+  background:
+    radial-gradient(circle at 18% 0%, rgba(64, 158, 255, 0.16), transparent 34%),
+    linear-gradient(135deg, #1a1a1a 0%, #151923 100%);
+}
+
+.dark-mode .profile-avatar-hint {
+  color: #a8b3c5;
 }
 
 .dark-mode .profile-info-avatar {
@@ -1596,6 +2231,33 @@ onMounted(async () => {
 .dark-mode .user-phone,
 .dark-mode .user-address {
   color: #e0e0e0;
+}
+
+.dark-mode .user-meta-list p {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #d3d9e6;
+}
+
+.dark-mode .avatar-crop-dialog :deep(.el-dialog) {
+  background: #1a1a1a;
+}
+
+.dark-mode .avatar-crop-stage {
+  background-color: #111827;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.dark-mode .avatar-crop-toolbar-head {
+  color: #a8b3c5;
+}
+
+.dark-mode .avatar-crop-toolbar-head strong {
+  color: #ffffff;
+}
+
+.dark-mode .avatar-crop-actions {
+  color: #a8b3c5;
 }
 
 
@@ -1981,8 +2643,8 @@ onMounted(async () => {
   }
 
   .avatar {
-    width: 64px;
-    height: 64px;
+    width: 96px;
+    height: 96px;
   }
 
   .user-details h2 {
@@ -2953,6 +3615,2636 @@ onMounted(async () => {
 
 .ring-text-large .ring-value {
   font-size: 1.2rem;
+}
+
+/* Modern Japanese minimal redesign */
+.profile-container {
+  padding: 1.25rem 0 3.5rem;
+  background:
+    radial-gradient(circle at 8% 4%, rgba(232, 166, 160, 0.16), transparent 28%),
+    radial-gradient(circle at 92% 12%, rgba(174, 190, 153, 0.18), transparent 30%),
+    linear-gradient(180deg, #fbfaf7 0%, #f6f1e9 100%);
+}
+
+.profile-container > .container {
+  padding: 0 1rem;
+}
+
+.profile-layout {
+  max-width: 1080px;
+  gap: 1.15rem;
+}
+
+.profile-info-card,
+.cup-history-card,
+.pubg-card {
+  border: 1px solid rgba(111, 96, 78, 0.12) !important;
+  border-radius: 22px;
+  background: rgba(255, 253, 248, 0.86);
+  box-shadow: 0 18px 44px rgba(77, 62, 45, 0.08);
+  backdrop-filter: blur(14px);
+  overflow: hidden;
+}
+
+.profile-info-card:hover,
+.cup-history-card:hover,
+.pubg-card:hover {
+  box-shadow: 0 22px 54px rgba(77, 62, 45, 0.11);
+}
+
+.profile-info-card {
+  background:
+    radial-gradient(circle at 88% 12%, rgba(232, 166, 160, 0.18), transparent 28%),
+    linear-gradient(135deg, rgba(255, 253, 248, 0.96), rgba(250, 245, 237, 0.92));
+}
+
+.profile-info-card::before {
+  background:
+    linear-gradient(90deg, rgba(152, 134, 105, 0.12) 0 1px, transparent 1px),
+    linear-gradient(180deg, rgba(152, 134, 105, 0.08) 0 1px, transparent 1px);
+  background-size: 28px 28px;
+  opacity: 0.5;
+}
+
+.profile-info-card :deep(.el-card__body) {
+  padding: 1.5rem;
+}
+
+.profile-info {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.78fr) minmax(0, 1.22fr);
+  gap: 1.25rem;
+  min-height: 0;
+  align-items: stretch;
+}
+
+.profile-info-avatar,
+.profile-info-content {
+  flex: none;
+  max-width: none;
+}
+
+.profile-info-avatar {
+  padding: 1.4rem 1rem;
+  border-right: 1px solid rgba(111, 96, 78, 0.12);
+  background: rgba(255, 255, 255, 0.46);
+  border-radius: 18px 0 0 18px;
+}
+
+.profile-info-content {
+  padding: 1.2rem 1.1rem;
+}
+
+.profile-avatar-kicker,
+.profile-kicker,
+.section-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: #9a8060;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  line-height: 1.2;
+}
+
+.profile-avatar-kicker::before,
+.profile-kicker::before,
+.section-kicker::before {
+  content: '';
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: #d9877d;
+}
+
+.avatar {
+  width: 132px;
+  height: 132px;
+  border: 5px solid rgba(255, 255, 255, 0.96);
+  background: linear-gradient(145deg, #f4efe6, #fffdf8);
+  box-shadow:
+    0 18px 34px rgba(97, 73, 45, 0.16),
+    0 0 0 1px rgba(111, 96, 78, 0.08);
+}
+
+.avatar-edit {
+  background: rgba(63, 50, 37, 0.58);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.profile-avatar-hint {
+  color: #958675;
+  font-size: 0.78rem;
+}
+
+.user-details h2 {
+  margin: 0.35rem 0 0.75rem;
+  text-align: left;
+  color: #2d2924;
+  font-size: clamp(1.55rem, 3vw, 2.25rem);
+  font-weight: 800;
+  letter-spacing: -0.035em;
+}
+
+.user-meta-list {
+  gap: 0.55rem;
+}
+
+.user-meta-list p {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.5rem 0.68rem;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid rgba(111, 96, 78, 0.1);
+  color: #3f382f;
+  box-shadow: 0 8px 20px rgba(77, 62, 45, 0.04);
+}
+
+.meta-label {
+  color: #9a8c7d;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.user-meta-list strong {
+  color: #3a332b;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.user-actions {
+  margin-top: 1rem;
+}
+
+.user-actions :deep(.el-button--primary),
+.hero-bind-form :deep(.el-button--primary),
+.match-filters :deep(.el-button--primary) {
+  border-color: transparent;
+  background: #2f3b35;
+  box-shadow: 0 10px 22px rgba(47, 59, 53, 0.16);
+}
+
+.user-actions :deep(.el-button--primary:hover),
+.hero-bind-form :deep(.el-button--primary:hover),
+.match-filters :deep(.el-button--primary:hover) {
+  background: #24302a;
+}
+
+.pubg-content {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.15rem;
+}
+
+.pubg-card-bind,
+.pubg-card-power {
+  min-height: 100%;
+}
+
+.pubg-card-stats,
+.pubg-card-matches {
+  grid-column: 1 / -1;
+}
+
+.pubg-card-title,
+.cup-history-title {
+  margin: 0.25rem 0 0.85rem;
+  color: #2d2924;
+  font-size: 1.12rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.pubg-card-desc,
+.power-subtitle,
+.stats-kd-hint,
+.cup-history-subtitle {
+  color: #8a7c6c !important;
+}
+
+.panel-bind-info {
+  align-items: stretch;
+}
+
+.bind-meta {
+  flex: 1;
+  min-width: 0;
+  padding: 0.85rem;
+  border-radius: 16px;
+  background: #f8f3ea;
+  border: 1px solid rgba(111, 96, 78, 0.1);
+}
+
+.bind-meta p {
+  color: #4b4036;
+  font-weight: 700;
+}
+
+.hero-actions-compact {
+  align-content: start;
+}
+
+.power-hero {
+  padding: 1.15rem;
+  border: 1px solid rgba(111, 96, 78, 0.12);
+  background:
+    radial-gradient(circle at 14% 16%, rgba(217, 135, 125, 0.18), transparent 34%),
+    linear-gradient(135deg, #fbf7ef 0%, #eef3ea 100%);
+}
+
+.power-score-num {
+  color: #2f3b35;
+  font-size: 2.75rem;
+}
+
+.power-score-label,
+.power-hero-level-label {
+  color: #897d6f;
+}
+
+.power-hero-level {
+  border-color: rgba(111, 96, 78, 0.16);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.power-metrics {
+  gap: 0.65rem;
+}
+
+.power-metric-item,
+.stats-kpi-item,
+.cup-summary-item {
+  border: 1px solid rgba(111, 96, 78, 0.1);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: 0 10px 22px rgba(77, 62, 45, 0.04);
+}
+
+.power-metric-value,
+.stats-kpi-value,
+.cup-summary-value {
+  color: #2f3b35;
+}
+
+.stats-card-head {
+  align-items: flex-start;
+}
+
+.stats-type-toggle {
+  background: #f2eadf;
+  border: 1px solid rgba(111, 96, 78, 0.08);
+}
+
+.stats-type-toggle :deep(.el-button--primary),
+.stats-type-toggle :deep(.el-button--primary.is-plain) {
+  color: #2f3b35 !important;
+  box-shadow: 0 8px 18px rgba(77, 62, 45, 0.08);
+}
+
+.stats-kpi-grid {
+  gap: 0.8rem;
+}
+
+.stats-kpi-item {
+  min-height: 5rem;
+  align-items: flex-start;
+  padding: 0.85rem 0.95rem;
+  text-align: left;
+}
+
+.stats-kpi-label {
+  color: #9a8c7d;
+  font-weight: 700;
+}
+
+.stats-kpi-value {
+  margin-top: 0.35rem;
+  font-size: 1.45rem;
+  letter-spacing: -0.02em;
+}
+
+.match-filters {
+  padding: 0.75rem;
+  border-radius: 16px;
+  background: #f8f3ea;
+}
+
+.match-item {
+  border-color: rgba(111, 96, 78, 0.11);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.74);
+  box-shadow: 0 10px 22px rgba(77, 62, 45, 0.04);
+}
+
+.match-item-main {
+  padding: 0.9rem 1rem;
+}
+
+.match-item-rank {
+  background: #f2eadf;
+  color: #6f604e;
+}
+
+.match-item-rank.top3 {
+  background: linear-gradient(135deg, #f6d58d, #d9877d);
+  color: #37261d;
+}
+
+.match-item-map,
+.match-member-col.stat {
+  color: #2d2924;
+}
+
+.match-tag,
+.match-metric {
+  border-color: rgba(111, 96, 78, 0.1);
+  background: #fbf8f1;
+}
+
+.match-item-detail {
+  border-top-color: rgba(111, 96, 78, 0.1);
+  background: #fffdf8;
+}
+
+.cup-history-card :deep(.el-card__body) {
+  padding: 1.35rem;
+}
+
+.cup-summary-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.cup-summary-item {
+  padding: 0.85rem 0.9rem;
+  text-align: left;
+}
+
+.cup-summary-value {
+  font-size: 1.45rem;
+}
+
+.cup-summary-label {
+  color: #9a8c7d;
+  font-weight: 700;
+}
+
+.cup-table-scroll :deep(.el-table) {
+  border-radius: 16px;
+  overflow: hidden;
+  --el-table-header-bg-color: #f8f3ea;
+  --el-table-tr-bg-color: rgba(255, 255, 255, 0.66);
+  --el-table-border-color: rgba(111, 96, 78, 0.08);
+}
+
+@media (max-width: 900px) {
+  .profile-layout {
+    max-width: 680px;
+  }
+
+  .profile-info,
+  .pubg-content {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-info-avatar {
+    border-right: none;
+    border-bottom: 1px solid rgba(111, 96, 78, 0.12);
+    border-radius: 18px 18px 0 0;
+  }
+}
+
+@media (max-width: 768px) {
+  .profile-container {
+    padding-top: 0.75rem;
+  }
+
+  .profile-container > .container {
+    padding: 0 0.65rem;
+  }
+
+  .profile-info-card :deep(.el-card__body),
+  .cup-history-card :deep(.el-card__body),
+  .pubg-card :deep(.el-card__body) {
+    padding: 1rem;
+  }
+
+  .profile-info {
+    display: grid;
+    gap: 0;
+  }
+
+  .profile-info-avatar {
+    padding: 1.15rem 0.5rem;
+  }
+
+  .profile-info-content {
+    padding: 1rem 0.25rem 0.25rem;
+  }
+
+  .user-details h2 {
+    text-align: center;
+    font-size: 1.55rem;
+  }
+
+  .user-meta-list p {
+    justify-content: center;
+    width: 100%;
+  }
+
+  .avatar {
+    width: 112px;
+    height: 112px;
+  }
+
+  .cup-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stats-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stats-kpi-item {
+    min-height: 4.4rem;
+    padding: 0.75rem;
+  }
+
+  .stats-kpi-value,
+  .cup-summary-value {
+    font-size: 1.25rem;
+  }
+}
+
+.dark-mode .profile-container {
+  background:
+    radial-gradient(circle at 8% 4%, rgba(217, 135, 125, 0.14), transparent 28%),
+    radial-gradient(circle at 92% 12%, rgba(174, 190, 153, 0.12), transparent 30%),
+    linear-gradient(180deg, #12110f 0%, #181612 100%);
+}
+
+.dark-mode .profile-info-card,
+.dark-mode .cup-history-card,
+.dark-mode .pubg-card {
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  background: rgba(29, 27, 23, 0.9);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.22);
+}
+
+.dark-mode .profile-info-card {
+  background:
+    radial-gradient(circle at 88% 12%, rgba(217, 135, 125, 0.14), transparent 28%),
+    linear-gradient(135deg, rgba(29, 27, 23, 0.96), rgba(23, 25, 22, 0.92));
+}
+
+.dark-mode .profile-info-avatar,
+.dark-mode .bind-meta,
+.dark-mode .match-filters {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.dark-mode .user-details h2,
+.dark-mode .pubg-card-title,
+.dark-mode .cup-history-title,
+.dark-mode .match-item-map,
+.dark-mode .stats-kpi-value,
+.dark-mode .cup-summary-value,
+.dark-mode .power-metric-value {
+  color: #f7f1e8;
+}
+
+.dark-mode .user-meta-list p,
+.dark-mode .power-metric-item,
+.dark-mode .stats-kpi-item,
+.dark-mode .cup-summary-item,
+.dark-mode .match-item {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.dark-mode .user-meta-list strong,
+.dark-mode .bind-meta p {
+  color: #f0e7dc;
+}
+
+.dark-mode .power-hero {
+  background:
+    radial-gradient(circle at 14% 16%, rgba(217, 135, 125, 0.16), transparent 34%),
+    linear-gradient(135deg, rgba(40, 36, 31, 0.95), rgba(28, 34, 29, 0.95));
+}
+
+.dark-mode .match-tag,
+.dark-mode .match-metric,
+.dark-mode .match-item-detail {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Card content refinement */
+.profile-info-card :deep(.el-card__body),
+.pubg-card :deep(.el-card__body),
+.cup-history-card :deep(.el-card__body) {
+  color: #3f382f;
+}
+
+.card-title-row,
+.match-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 0.85rem;
+}
+
+.card-title-row .pubg-card-title,
+.card-title-row .cup-history-title,
+.match-card-top .pubg-card-title {
+  margin-bottom: 0.25rem;
+}
+
+.card-subcopy {
+  margin: 0;
+  color: #8a7c6c;
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.status-pill,
+.platform-pill,
+.match-count-pill {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(111, 96, 78, 0.12);
+  background: rgba(255, 255, 255, 0.66);
+  color: #6f604e;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.status-pill {
+  min-height: 1.8rem;
+  padding: 0.28rem 0.68rem;
+}
+
+.status-pill-success {
+  border-color: rgba(82, 133, 92, 0.18);
+  background: rgba(236, 246, 230, 0.76);
+  color: #3d6f42;
+}
+
+.platform-pill {
+  min-height: 1.65rem;
+  padding: 0.2rem 0.55rem;
+  background: #2f3b35;
+  color: #fffdf8;
+}
+
+.bind-meta-featured {
+  position: relative;
+  padding: 1rem;
+  overflow: hidden;
+}
+
+.bind-meta-featured::after {
+  content: '';
+  position: absolute;
+  right: -26px;
+  top: -26px;
+  width: 86px;
+  height: 86px;
+  border-radius: 50%;
+  background: rgba(217, 135, 125, 0.14);
+}
+
+.bind-meta-label {
+  display: block;
+  color: #9a8c7d;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.bind-player-name {
+  position: relative;
+  z-index: 1;
+  display: block;
+  margin-top: 0.35rem;
+  color: #2d2924;
+  font-size: 1.35rem;
+  font-weight: 850;
+  line-height: 1.2;
+  word-break: break-word;
+}
+
+.bind-platform-line {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 0.8rem;
+}
+
+.bind-sync-note {
+  color: #8a7c6c;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.hero-actions-compact .el-button {
+  border-radius: 999px !important;
+  font-weight: 700;
+}
+
+.power-hero {
+  position: relative;
+  overflow: hidden;
+}
+
+.power-hero::after {
+  content: '';
+  position: absolute;
+  right: 1rem;
+  bottom: -1.8rem;
+  width: 8rem;
+  height: 8rem;
+  border: 1px solid rgba(111, 96, 78, 0.08);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.power-hero-score,
+.power-hero-level {
+  position: relative;
+  z-index: 1;
+}
+
+.power-metric-item {
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.power-metric-item:hover,
+.stats-kpi-item:hover,
+.cup-summary-item:hover {
+  transform: translateY(-2px);
+  border-color: rgba(217, 135, 125, 0.24);
+  box-shadow: 0 14px 26px rgba(77, 62, 45, 0.08);
+}
+
+.stats-kpi-item {
+  position: relative;
+  overflow: hidden;
+}
+
+.stats-kpi-item::before {
+  content: '';
+  position: absolute;
+  left: 0.9rem;
+  top: 0.8rem;
+  width: 0.28rem;
+  height: 1.15rem;
+  border-radius: 999px;
+  background: #d9877d;
+}
+
+.stats-kpi-label,
+.stats-kpi-value,
+.stats-kpi-foot {
+  position: relative;
+  z-index: 1;
+}
+
+.stats-kpi-label {
+  padding-left: 0.55rem;
+}
+
+.stats-kpi-foot {
+  margin-top: 0.25rem;
+  color: #a1978c;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.match-card-top {
+  align-items: center;
+}
+
+.match-count-pill {
+  flex-direction: column;
+  min-width: 4.8rem;
+  min-height: 3.2rem;
+  padding: 0.45rem 0.7rem;
+  background: #f8f3ea;
+  line-height: 1.1;
+}
+
+.match-count-pill strong {
+  color: #2f3b35;
+  font-size: 1.15rem;
+}
+
+.match-count-pill span {
+  margin-top: 0.15rem;
+  color: #9a8c7d;
+  font-size: 0.68rem;
+}
+
+.match-filters {
+  align-items: center;
+  border: 1px solid rgba(111, 96, 78, 0.08);
+}
+
+.match-filters :deep(.el-input__wrapper),
+.match-filters :deep(.el-select__wrapper) {
+  border-radius: 999px !important;
+  box-shadow: 0 0 0 1px rgba(111, 96, 78, 0.1) inset !important;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.match-item {
+  cursor: pointer;
+}
+
+.match-item:hover {
+  border-color: rgba(217, 135, 125, 0.24);
+  box-shadow: 0 16px 30px rgba(77, 62, 45, 0.08);
+}
+
+.match-item-main:focus-visible {
+  outline: 2px solid rgba(217, 135, 125, 0.45);
+  outline-offset: -3px;
+}
+
+.match-item-row-sub {
+  align-items: center;
+}
+
+.match-member-head {
+  color: #9a8c7d;
+}
+
+.match-member-row {
+  color: #5f554a;
+}
+
+.cup-title-row {
+  align-items: center;
+}
+
+.cup-summary-item {
+  position: relative;
+  overflow: hidden;
+}
+
+.cup-summary-item::after {
+  content: '';
+  position: absolute;
+  right: -18px;
+  bottom: -18px;
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  background: rgba(174, 190, 153, 0.16);
+}
+
+.cup-summary-value,
+.cup-summary-label {
+  position: relative;
+  z-index: 1;
+}
+
+.cup-table-scroll {
+  border: 1px solid rgba(111, 96, 78, 0.08);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.cup-table-scroll :deep(.el-table th.el-table__cell) {
+  color: #6f604e;
+  font-weight: 800;
+}
+
+.cup-table-scroll :deep(.el-table td.el-table__cell) {
+  color: #4b4036;
+}
+
+@media (max-width: 768px) {
+  .card-title-row,
+  .match-card-top {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.65rem;
+  }
+
+  .status-pill,
+  .match-count-pill {
+    align-self: flex-start;
+  }
+
+  .match-count-pill {
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 0.35rem;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .bind-player-name {
+    font-size: 1.2rem;
+  }
+
+  .stats-kpi-label {
+    padding-left: 0.5rem;
+  }
+}
+
+.dark-mode .card-subcopy,
+.dark-mode .bind-sync-note,
+.dark-mode .stats-kpi-foot,
+.dark-mode .match-count-pill span {
+  color: #b8aa98;
+}
+
+.dark-mode .status-pill,
+.dark-mode .match-count-pill {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.07);
+  color: #e7dccd;
+}
+
+.dark-mode .status-pill-success {
+  border-color: rgba(141, 190, 132, 0.2);
+  background: rgba(91, 129, 76, 0.2);
+  color: #b9e2ad;
+}
+
+.dark-mode .bind-player-name,
+.dark-mode .match-count-pill strong {
+  color: #f7f1e8;
+}
+
+.dark-mode .match-filters :deep(.el-input__wrapper),
+.dark-mode .match-filters :deep(.el-select__wrapper) {
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1) inset !important;
+}
+
+.dark-mode .cup-table-scroll {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Spark power rank redesign */
+.pubg-card-power {
+  position: relative;
+}
+
+.pubg-card-power :deep(.el-card__body) {
+  position: relative;
+}
+
+.pubg-card-power .power-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(150px, 0.85fr);
+  align-items: stretch;
+  gap: 0.9rem;
+  padding: 0.9rem;
+  min-height: 9.5rem;
+}
+
+.pubg-card-power .power-hero-score {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.15rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.52);
+  border: 1px solid rgba(111, 96, 78, 0.08);
+}
+
+.pubg-card-power .power-score-label {
+  order: 0;
+  color: #8a7c6c;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.pubg-card-power .power-score-num {
+  order: 1;
+  font-size: clamp(2.8rem, 7vw, 4.2rem);
+  font-weight: 900;
+  letter-spacing: -0.06em;
+  line-height: 0.95;
+}
+
+.pubg-card-power .power-score-caption {
+  order: 2;
+  margin-top: 0.2rem;
+  color: #a1978c;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.pubg-card-power .power-hero-level {
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 8rem;
+  padding: 1rem;
+  border-radius: 22px;
+  overflow: hidden;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.52),
+    0 18px 32px rgba(77, 62, 45, 0.11);
+  transition: transform 0.22s ease, box-shadow 0.22s ease;
+}
+
+.pubg-card-power .power-hero-level:hover {
+  transform: translateY(-2px);
+}
+
+.power-level-orbit {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+.power-level-orbit::before,
+.power-level-orbit::after {
+  content: '';
+  position: absolute;
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.power-level-orbit::before {
+  width: 8rem;
+  height: 8rem;
+  right: -3.2rem;
+  top: -3.2rem;
+  border: 1px solid rgba(255, 255, 255, 0.32);
+}
+
+.power-level-orbit::after {
+  width: 3.8rem;
+  height: 3.8rem;
+  left: -1.2rem;
+  bottom: -1.2rem;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.pubg-card-power .power-hero-level-label {
+  color: currentColor;
+  opacity: 0.78;
+  font-size: 0.7rem;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+}
+
+.pubg-card-power .power-hero-level-value {
+  margin-top: 0.28rem;
+  color: currentColor;
+  font-size: clamp(2.05rem, 5vw, 3.2rem);
+  font-weight: 950;
+  line-height: 0.95;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.power-hero-level-desc {
+  margin-top: 0.48rem;
+  color: currentColor;
+  opacity: 0.82;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.power-rank-empty {
+  color: #7b8493;
+  border-color: #e3e8ef;
+  background: linear-gradient(145deg, #f8fafc, #edf2f7);
+}
+
+.power-rank-e {
+  color: #596273;
+  border-color: #d8dee8;
+  background: linear-gradient(145deg, #f7f8fa 0%, #e8edf3 100%);
+}
+
+.power-rank-d {
+  color: #53636e;
+  border-color: #cad7df;
+  background: linear-gradient(145deg, #eef5f7 0%, #dce9ed 100%);
+}
+
+.power-rank-c {
+  color: #205c5b;
+  border-color: #9ed6cf;
+  background:
+    radial-gradient(circle at 22% 18%, rgba(255, 255, 255, 0.75), transparent 28%),
+    linear-gradient(145deg, #e8faf5 0%, #bfe7df 52%, #9ed9cf 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 16px 30px rgba(46, 125, 119, 0.16);
+}
+
+.power-rank-b {
+  color: #1f5c3b;
+  border-color: #9bcf8b;
+  background:
+    radial-gradient(circle at 20% 18%, rgba(255, 255, 255, 0.78), transparent 28%),
+    linear-gradient(145deg, #f1fae8 0%, #cfe7ae 48%, #a9d281 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 18px 34px rgba(74, 132, 71, 0.18);
+}
+
+.power-rank-a {
+  color: #51328f;
+  border-color: #bca8f5;
+  background:
+    radial-gradient(circle at 20% 16%, rgba(255, 255, 255, 0.82), transparent 27%),
+    linear-gradient(145deg, #fbf4ff 0%, #ddd0ff 45%, #bba5f0 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.76),
+    0 20px 38px rgba(106, 78, 180, 0.22);
+}
+
+.power-rank-s {
+  color: #174690;
+  border-color: #86b9ff;
+  background:
+    radial-gradient(circle at 18% 16%, rgba(255, 255, 255, 0.88), transparent 26%),
+    linear-gradient(145deg, #f2f8ff 0%, #bcd9ff 42%, #73a7ff 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.82),
+    0 22px 42px rgba(47, 103, 196, 0.28),
+    0 0 32px rgba(115, 167, 255, 0.18);
+}
+
+.power-rank-demon-s {
+  color: #4b2500;
+  border-color: #f0c15a;
+  background:
+    radial-gradient(circle at 18% 14%, rgba(255, 255, 255, 0.9), transparent 24%),
+    radial-gradient(circle at 78% 28%, rgba(255, 238, 153, 0.72), transparent 28%),
+    linear-gradient(145deg, #fff7d8 0%, #f6ce63 42%, #c8891e 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.88),
+    0 26px 48px rgba(175, 115, 18, 0.34),
+    0 0 42px rgba(246, 206, 99, 0.28);
+}
+
+.power-rank-s .power-level-orbit::before,
+.power-rank-demon-s .power-level-orbit::before {
+  border-style: dashed;
+  animation: power-orbit-spin 16s linear infinite;
+}
+
+.power-rank-demon-s .power-hero-level-value {
+  text-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.72),
+    0 8px 18px rgba(104, 58, 0, 0.22);
+}
+
+@keyframes power-orbit-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 768px) {
+  .pubg-card-power .power-hero {
+    grid-template-columns: 1fr;
+    min-height: 0;
+    padding: 0.8rem;
+  }
+
+  .pubg-card-power .power-hero-score {
+    align-items: center;
+    text-align: center;
+  }
+
+  .pubg-card-power .power-hero-level {
+    min-height: 7.2rem;
+  }
+}
+
+.dark-mode .pubg-card-power .power-hero-score {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.dark-mode .power-rank-c {
+  color: #b7fff4;
+  background: linear-gradient(145deg, #123936 0%, #175a52 55%, #1b7468 100%);
+}
+
+.dark-mode .power-rank-b {
+  color: #d7ffc8;
+  background: linear-gradient(145deg, #1d3925 0%, #336d38 55%, #57944b 100%);
+}
+
+.dark-mode .power-rank-a {
+  color: #eadfff;
+  background: linear-gradient(145deg, #2b2046 0%, #584198 55%, #7f66c9 100%);
+}
+
+.dark-mode .power-rank-s {
+  color: #e1efff;
+  background: linear-gradient(145deg, #142a4a 0%, #235aa0 50%, #4b8be8 100%);
+}
+
+.dark-mode .power-rank-demon-s {
+  color: #fff4c7;
+  background:
+    radial-gradient(circle at 78% 28%, rgba(255, 238, 153, 0.28), transparent 28%),
+    linear-gradient(145deg, #4a2a05 0%, #9b6414 48%, #e2b649 100%);
+}
+
+.power-formula-dialog :deep(.el-dialog) {
+  border-radius: 22px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 88% 8%, rgba(232, 166, 160, 0.13), transparent 28%),
+    linear-gradient(135deg, #fffdf8 0%, #f8f3ea 100%);
+}
+
+.power-formula-dialog :deep(.el-dialog__header) {
+  padding: 1.25rem 1.35rem 0.5rem;
+}
+
+.power-formula-dialog :deep(.el-dialog__title) {
+  color: #2d2924;
+  font-weight: 850;
+  letter-spacing: -0.02em;
+}
+
+.power-formula-dialog :deep(.el-dialog__body) {
+  padding: 0.75rem 1.35rem 1.1rem;
+}
+
+.power-formula-dialog :deep(.el-dialog__footer) {
+  padding: 0 1.35rem 1.25rem;
+}
+
+.power-formula-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.power-formula-section {
+  padding: 1rem;
+  border: 1px solid rgba(111, 96, 78, 0.1);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.power-formula-section h4 {
+  margin: 0.3rem 0 0.7rem;
+  color: #2d2924;
+  font-size: 1rem;
+  font-weight: 850;
+}
+
+.power-formula-equation {
+  margin: 0;
+  padding: 0.8rem 0.9rem;
+  border-radius: 14px;
+  background: #2f3b35;
+  color: #fffdf8;
+  font-size: 0.86rem;
+  line-height: 1.6;
+  font-weight: 700;
+}
+
+.power-factor-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin-top: 0.8rem;
+}
+
+.power-factor-item {
+  padding: 0.75rem;
+  border: 1px solid rgba(111, 96, 78, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.power-factor-item span {
+  display: block;
+  color: #9a8c7d;
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
+.power-factor-item strong {
+  display: block;
+  margin-top: 0.3rem;
+  color: #3f382f;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.power-rank-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.power-rank-preview-card {
+  min-width: 0 !important;
+  min-height: 7.2rem !important;
+  padding: 0.75rem 0.45rem !important;
+  border-radius: 18px !important;
+  text-align: center;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.52),
+    0 12px 24px rgba(77, 62, 45, 0.1) !important;
+}
+
+.power-rank-preview-card .power-hero-level-label {
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+}
+
+.power-rank-preview-card .power-hero-level-value {
+  font-size: 1.55rem;
+}
+
+.power-rank-preview-card.power-rank-demon-s .power-hero-level-value {
+  font-size: 1.25rem;
+}
+
+.power-rank-preview-card .power-hero-level-desc {
+  margin-top: 0.35rem;
+  font-size: 0.66rem;
+  letter-spacing: 0.04em;
+}
+
+@media (max-width: 768px) {
+  .power-formula-dialog :deep(.el-dialog) {
+    width: calc(100vw - 24px) !important;
+  }
+
+  .power-factor-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .power-rank-preview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .power-rank-preview-card:last-child {
+    grid-column: 1 / -1;
+  }
+}
+
+.dark-mode .power-formula-dialog :deep(.el-dialog) {
+  background:
+    radial-gradient(circle at 88% 8%, rgba(217, 135, 125, 0.14), transparent 28%),
+    linear-gradient(135deg, rgba(29, 27, 23, 0.98), rgba(23, 25, 22, 0.98));
+}
+
+.dark-mode .power-formula-dialog :deep(.el-dialog__title),
+.dark-mode .power-formula-section h4,
+.dark-mode .power-factor-item strong {
+  color: #f7f1e8;
+}
+
+.dark-mode .power-formula-section,
+.dark-mode .power-factor-item {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.dark-mode .power-formula-equation {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f7f1e8;
+}
+
+/* Competitive-rank emblem polish */
+.pubg-card-power .power-hero-level,
+.power-rank-preview-card {
+  border: none !important;
+  border-radius: 24px !important;
+  background-color: #111827;
+}
+
+.pubg-card-power .power-hero-level::before,
+.power-rank-preview-card::before {
+  content: '';
+  position: absolute;
+  inset: 0.72rem 0.88rem 1.82rem;
+  z-index: -1;
+  clip-path: polygon(50% 0%, 88% 13%, 100% 48%, 78% 82%, 50% 100%, 22% 82%, 0% 48%, 12% 13%);
+  border-radius: 18px;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.08) 40%, rgba(0, 0, 0, 0.22)),
+    var(--rank-metal, linear-gradient(145deg, #cbd5e1, #64748b));
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.75),
+    inset 0 -10px 18px rgba(0, 0, 0, 0.18),
+    0 14px 24px rgba(0, 0, 0, 0.18);
+}
+
+.pubg-card-power .power-hero-level::after,
+.power-rank-preview-card::after {
+  content: '';
+  position: absolute;
+  inset: 1.18rem 1.34rem 2.24rem;
+  z-index: -1;
+  clip-path: polygon(50% 0%, 84% 15%, 96% 49%, 74% 78%, 50% 93%, 26% 78%, 4% 49%, 16% 15%);
+  background:
+    radial-gradient(circle at 50% 26%, rgba(255, 255, 255, 0.55), transparent 28%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.18), rgba(0, 0, 0, 0.2)),
+    var(--rank-core, linear-gradient(145deg, #e2e8f0, #64748b));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    inset 0 -8px 14px rgba(0, 0, 0, 0.18);
+}
+
+.pubg-card-power .power-hero-level-label,
+.pubg-card-power .power-hero-level-value,
+.pubg-card-power .power-hero-level-desc,
+.power-rank-preview-card .power-hero-level-label,
+.power-rank-preview-card .power-hero-level-value,
+.power-rank-preview-card .power-hero-level-desc {
+  z-index: 2;
+}
+
+.pubg-card-power .power-hero-level-label,
+.power-rank-preview-card .power-hero-level-label {
+  margin-top: 0.3rem;
+  padding: 0.18rem 0.48rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.18);
+  color: rgba(255, 255, 255, 0.88);
+  text-shadow: none;
+}
+
+.pubg-card-power .power-hero-level-value,
+.power-rank-preview-card .power-hero-level-value {
+  color: #fff;
+  font-family: Georgia, 'Times New Roman', serif;
+  letter-spacing: -0.04em;
+  text-shadow:
+    0 2px 0 rgba(0, 0, 0, 0.22),
+    0 8px 18px rgba(0, 0, 0, 0.2);
+}
+
+.pubg-card-power .power-hero-level-desc,
+.power-rank-preview-card .power-hero-level-desc {
+  padding: 0.22rem 0.62rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--rank-text, #334155);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.12);
+}
+
+.power-rank-empty,
+.power-rank-e {
+  --rank-metal: linear-gradient(145deg, #d7dde7 0%, #94a3b8 48%, #64748b 100%);
+  --rank-core: linear-gradient(145deg, #f8fafc 0%, #cbd5e1 48%, #94a3b8 100%);
+  --rank-text: #526071;
+  background:
+    radial-gradient(circle at 50% 24%, rgba(255, 255, 255, 0.42), transparent 28%),
+    linear-gradient(180deg, #f8fafc 0%, #dce3ec 100%) !important;
+  box-shadow: 0 16px 30px rgba(71, 85, 105, 0.18) !important;
+}
+
+.power-rank-d {
+  --rank-metal: linear-gradient(145deg, #dce7ec 0%, #9fb4bf 48%, #647985 100%);
+  --rank-core: linear-gradient(145deg, #f2fbfc 0%, #c7dce2 48%, #91aab5 100%);
+  --rank-text: #4d6570;
+  background:
+    radial-gradient(circle at 50% 24%, rgba(255, 255, 255, 0.42), transparent 28%),
+    linear-gradient(180deg, #edf7f9 0%, #d4e2e7 100%) !important;
+  box-shadow: 0 16px 30px rgba(77, 101, 112, 0.18) !important;
+}
+
+.power-rank-c {
+  --rank-metal: linear-gradient(145deg, #d9fff7 0%, #5fc7b9 45%, #17796e 100%);
+  --rank-core: linear-gradient(145deg, #f4fffc 0%, #94e1d7 42%, #28a092 100%);
+  --rank-text: #176f66;
+  background:
+    radial-gradient(circle at 50% 24%, rgba(217, 255, 247, 0.64), transparent 30%),
+    linear-gradient(180deg, #e9fbf6 0%, #bfe9df 100%) !important;
+  box-shadow:
+    0 18px 34px rgba(28, 135, 124, 0.22),
+    0 0 26px rgba(95, 199, 185, 0.14) !important;
+}
+
+.power-rank-b {
+  --rank-metal: linear-gradient(145deg, #ecffd8 0%, #95cd54 45%, #3e7f2e 100%);
+  --rank-core: linear-gradient(145deg, #fbfff2 0%, #c8e98b 42%, #66ad48 100%);
+  --rank-text: #3d782f;
+  background:
+    radial-gradient(circle at 50% 24%, rgba(236, 255, 216, 0.66), transparent 30%),
+    linear-gradient(180deg, #f2fae8 0%, #d6edbd 100%) !important;
+  box-shadow:
+    0 18px 36px rgba(81, 135, 50, 0.22),
+    0 0 28px rgba(149, 205, 84, 0.16) !important;
+}
+
+.power-rank-a {
+  --rank-metal: linear-gradient(145deg, #fff0ff 0%, #b39cff 42%, #6040b2 100%);
+  --rank-core: linear-gradient(145deg, #fff8ff 0%, #d8c8ff 40%, #8868df 100%);
+  --rank-text: #5b3aa0;
+  background:
+    radial-gradient(circle at 50% 22%, rgba(255, 240, 255, 0.72), transparent 30%),
+    linear-gradient(180deg, #fbf4ff 0%, #e4d8ff 100%) !important;
+  box-shadow:
+    0 20px 40px rgba(103, 72, 174, 0.26),
+    0 0 34px rgba(179, 156, 255, 0.2) !important;
+}
+
+.power-rank-s {
+  --rank-metal: linear-gradient(145deg, #f0fbff 0%, #7ec6ff 36%, #2f6fe8 72%, #163f9e 100%);
+  --rank-core: linear-gradient(145deg, #ffffff 0%, #b9e4ff 36%, #5f9df5 100%);
+  --rank-text: #2356b8;
+  background:
+    radial-gradient(circle at 50% 20%, rgba(240, 251, 255, 0.78), transparent 30%),
+    linear-gradient(180deg, #f1f8ff 0%, #cde6ff 100%) !important;
+  box-shadow:
+    0 22px 44px rgba(47, 111, 232, 0.3),
+    0 0 42px rgba(126, 198, 255, 0.28) !important;
+}
+
+.power-rank-demon-s {
+  --rank-metal: linear-gradient(145deg, #fff8d5 0%, #ffd66b 30%, #d49324 62%, #7d3c00 100%);
+  --rank-core: linear-gradient(145deg, #fffdf0 0%, #ffe58b 34%, #e3a82e 100%);
+  --rank-text: #7a4200;
+  background:
+    radial-gradient(circle at 50% 18%, rgba(255, 248, 213, 0.88), transparent 28%),
+    radial-gradient(circle at 70% 26%, rgba(255, 226, 120, 0.5), transparent 24%),
+    linear-gradient(180deg, #fff3c5 0%, #e8b64c 100%) !important;
+  box-shadow:
+    0 26px 52px rgba(176, 105, 15, 0.38),
+    0 0 52px rgba(255, 214, 107, 0.36) !important;
+}
+
+.power-rank-demon-s .power-level-orbit::before {
+  border-color: rgba(255, 255, 255, 0.55);
+  box-shadow: 0 0 24px rgba(255, 214, 107, 0.38);
+}
+
+.power-rank-s .power-level-orbit::before {
+  border-color: rgba(255, 255, 255, 0.48);
+  box-shadow: 0 0 22px rgba(126, 198, 255, 0.3);
+}
+
+.power-rank-preview-card {
+  min-height: 7.8rem !important;
+}
+
+.power-rank-preview-card::before {
+  inset: 0.58rem 0.6rem 1.7rem;
+}
+
+.power-rank-preview-card::after {
+  inset: 0.95rem 0.98rem 2.06rem;
+}
+
+.power-rank-preview-card .power-hero-level-desc {
+  padding: 0.16rem 0.45rem;
+}
+
+/* CS2/Premier inspired rank plates: compact, readable, no forced single row */
+.power-rank-empty,
+.power-rank-e {
+  --rank-accent: #9aa4b2;
+  --rank-accent-2: #c6ccd5;
+  --rank-glow: rgba(154, 164, 178, 0.22);
+  --rank-bg: #202633;
+}
+
+.power-rank-d {
+  --rank-accent: #63bdd1;
+  --rank-accent-2: #bcecf5;
+  --rank-glow: rgba(99, 189, 209, 0.24);
+  --rank-bg: #162f3b;
+}
+
+.power-rank-c {
+  --rank-accent: #4b8dff;
+  --rank-accent-2: #a9cbff;
+  --rank-glow: rgba(75, 141, 255, 0.28);
+  --rank-bg: #14284c;
+}
+
+.power-rank-b {
+  --rank-accent: #8f6bff;
+  --rank-accent-2: #d3c4ff;
+  --rank-glow: rgba(143, 107, 255, 0.3);
+  --rank-bg: #281d4f;
+}
+
+.power-rank-a {
+  --rank-accent: #d553a5;
+  --rank-accent-2: #ffc0e4;
+  --rank-glow: rgba(213, 83, 165, 0.32);
+  --rank-bg: #401935;
+}
+
+.power-rank-s {
+  --rank-accent: #e24d4d;
+  --rank-accent-2: #ffc0b8;
+  --rank-glow: rgba(226, 77, 77, 0.34);
+  --rank-bg: #451c1f;
+}
+
+.power-rank-demon-s {
+  --rank-accent: #f0b742;
+  --rank-accent-2: #ffe39a;
+  --rank-glow: rgba(240, 183, 66, 0.42);
+  --rank-bg: #442b07;
+}
+
+.pubg-card-power .power-hero {
+  grid-template-columns: minmax(0, 1fr) 176px !important;
+  align-items: center !important;
+  min-height: 0 !important;
+  padding: 0.85rem !important;
+  border-radius: 22px;
+}
+
+.pubg-card-power .power-hero-score {
+  min-height: 8.25rem;
+}
+
+.pubg-card-power .power-hero-level {
+  position: relative;
+  isolation: isolate;
+  display: grid !important;
+  grid-template-rows: auto 1fr auto;
+  align-items: center;
+  justify-items: center;
+  width: 176px;
+  min-width: 176px !important;
+  min-height: 8.25rem !important;
+  padding: 0.8rem 0.7rem !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: 16px !important;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.11), transparent 34%),
+    linear-gradient(180deg, color-mix(in srgb, var(--rank-bg) 86%, #ffffff 14%) 0%, var(--rank-bg) 100%) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.32),
+    0 16px 34px var(--rank-glow) !important;
+  overflow: hidden;
+  transform: none !important;
+}
+
+.pubg-card-power .power-hero-level::before,
+.pubg-card-power .power-hero-level::after,
+.power-rank-preview-card::before,
+.power-rank-preview-card::after {
+  clip-path: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.pubg-card-power .power-hero-level::before,
+.power-rank-preview-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: -1;
+  height: 0.36rem;
+  background: linear-gradient(90deg, var(--rank-accent), var(--rank-accent-2), var(--rank-accent));
+}
+
+.pubg-card-power .power-hero-level::after,
+.power-rank-preview-card::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  right: -2.6rem;
+  top: 0.7rem;
+  width: 7.6rem;
+  height: 7.6rem;
+  background:
+    linear-gradient(135deg, transparent 0 44%, rgba(255, 255, 255, 0.11) 45% 54%, transparent 55%),
+    radial-gradient(circle, var(--rank-glow), transparent 66%);
+  transform: rotate(18deg);
+}
+
+.pubg-card-power .power-level-orbit,
+.power-rank-preview-card .power-level-orbit {
+  display: none !important;
+}
+
+.pubg-card-power .power-hero-level-label,
+.power-rank-preview-card .power-hero-level-label {
+  justify-self: stretch;
+  margin: 0 !important;
+  padding: 0.24rem 0.42rem !important;
+  border-radius: 999px !important;
+  background: rgba(0, 0, 0, 0.2) !important;
+  color: rgba(255, 255, 255, 0.72) !important;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+  font-size: 0.62rem !important;
+  font-weight: 800 !important;
+  line-height: 1.1;
+  text-align: center;
+  letter-spacing: 0.08em !important;
+}
+
+.pubg-card-power .power-hero-level-value,
+.power-rank-preview-card .power-hero-level-value {
+  margin: 0.25rem 0 !important;
+  color: #fff !important;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+  font-size: clamp(2.1rem, 4vw, 2.8rem) !important;
+  font-weight: 950 !important;
+  letter-spacing: -0.07em !important;
+  line-height: 0.95 !important;
+  text-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.16),
+    0 8px 18px rgba(0, 0, 0, 0.34) !important;
+}
+
+.pubg-card-power .power-rank-demon-s .power-hero-level-value,
+.power-rank-preview-card.power-rank-demon-s .power-hero-level-value {
+  font-size: clamp(1.45rem, 3vw, 1.9rem) !important;
+  letter-spacing: -0.08em !important;
+}
+
+.pubg-card-power .power-hero-level-desc,
+.power-rank-preview-card .power-hero-level-desc {
+  margin: 0 !important;
+  padding: 0.28rem 0.62rem !important;
+  border: 1px solid color-mix(in srgb, var(--rank-accent) 62%, transparent);
+  border-radius: 999px !important;
+  background: rgba(0, 0, 0, 0.22) !important;
+  color: color-mix(in srgb, var(--rank-accent-2) 82%, #ffffff 18%) !important;
+  box-shadow: none !important;
+  font-size: 0.7rem !important;
+  font-weight: 850 !important;
+  letter-spacing: 0.06em !important;
+  white-space: nowrap;
+}
+
+.power-rank-preview-grid {
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)) !important;
+  align-items: stretch;
+  gap: 0.75rem !important;
+}
+
+.power-rank-preview-card {
+  position: relative;
+  isolation: isolate;
+  display: grid !important;
+  grid-template-rows: auto 1fr auto;
+  align-items: center;
+  justify-items: center;
+  min-width: 0 !important;
+  min-height: 7.4rem !important;
+  padding: 0.72rem 0.62rem !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: 16px !important;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.11), transparent 34%),
+    linear-gradient(180deg, color-mix(in srgb, var(--rank-bg) 86%, #ffffff 14%) 0%, var(--rank-bg) 100%) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.32),
+    0 12px 26px var(--rank-glow) !important;
+  overflow: hidden;
+}
+
+.power-rank-preview-card .power-hero-level-value {
+  font-size: 2rem !important;
+}
+
+.power-rank-preview-card.power-rank-demon-s .power-hero-level-value {
+  font-size: 1.35rem !important;
+}
+
+@media (max-width: 768px) {
+  .pubg-card-power .power-hero {
+    grid-template-columns: 1fr !important;
+  }
+
+  .pubg-card-power .power-hero-score,
+  .pubg-card-power .power-hero-level {
+    width: 100%;
+    min-width: 0 !important;
+  }
+
+  .power-rank-preview-grid {
+    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)) !important;
+  }
+}
+
+/* Apple minimal sharp redesign (straight edges) */
+.profile-container {
+  padding: 1rem 0 2.5rem;
+  background: #f5f5f7 !important;
+}
+
+.profile-container > .container {
+  padding: 0 1rem;
+}
+
+.profile-layout {
+  max-width: 1100px;
+  gap: 0.9rem;
+}
+
+.profile-info-card,
+.cup-history-card,
+.pubg-card {
+  border-radius: 0 !important;
+  border: 1px solid #e5e5ea !important;
+  background: #ffffff !important;
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.03) !important;
+}
+
+.profile-info-card::before,
+.profile-info-card::after,
+.pubg-card::before,
+.pubg-card::after,
+.cup-history-card::before,
+.cup-history-card::after {
+  display: none !important;
+}
+
+.profile-info-card :deep(.el-card__body),
+.pubg-card :deep(.el-card__body),
+.cup-history-card :deep(.el-card__body) {
+  padding: 1rem !important;
+}
+
+.section-kicker,
+.profile-kicker,
+.profile-avatar-kicker {
+  color: #8e8e93 !important;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+}
+
+.section-kicker::before,
+.profile-kicker::before,
+.profile-avatar-kicker::before {
+  display: none !important;
+}
+
+.profile-info {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  align-items: stretch;
+  gap: 1rem;
+}
+
+.profile-info-avatar {
+  border-right: 1px solid #f0f0f5 !important;
+  border-bottom: none !important;
+  border-radius: 0 !important;
+  padding: 1rem 0.8rem;
+  background: #fbfbfd;
+}
+
+.avatar {
+  width: 120px !important;
+  height: 120px !important;
+  border-radius: 50% !important;
+  border: 1px solid #e5e5ea !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+.avatar-edit {
+  border-radius: 50% !important;
+  background: rgba(0, 0, 0, 0.52) !important;
+}
+
+.profile-avatar-hint {
+  color: #8e8e93;
+  font-size: 0.74rem;
+}
+
+.profile-info-content {
+  padding: 0.5rem 0.4rem 0.5rem 0;
+}
+
+.user-details h2 {
+  margin: 0.2rem 0 0.65rem;
+  color: #1d1d1f;
+  font-size: clamp(1.3rem, 2.3vw, 1.8rem);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-align: left;
+}
+
+.user-meta-list {
+  gap: 0.45rem;
+}
+
+.user-meta-list p {
+  border-radius: 0 !important;
+  border: 1px solid #ececf1 !important;
+  background: #fafafd !important;
+  color: #3a3a3c !important;
+  padding: 0.35rem 0.5rem;
+  box-shadow: none !important;
+}
+
+.meta-label {
+  color: #8e8e93;
+  font-weight: 600;
+}
+
+.user-meta-list strong {
+  color: #1d1d1f;
+  font-weight: 600;
+}
+
+.user-actions .el-button,
+.hero-actions .el-button,
+.hero-actions-compact .el-button {
+  border-radius: 0 !important;
+  font-weight: 600;
+}
+
+.user-actions .el-button--primary,
+.hero-bind-form .el-button--primary,
+.match-filters .el-button--primary {
+  background: #1d1d1f !important;
+  border-color: #1d1d1f !important;
+  box-shadow: none !important;
+}
+
+.pubg-content {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.pubg-card-stats,
+.pubg-card-matches {
+  grid-column: 1 / -1;
+}
+
+.card-title-row,
+.match-card-top,
+.stats-card-head {
+  margin-bottom: 0.65rem;
+}
+
+.pubg-card-title,
+.cup-history-title {
+  margin: 0.2rem 0 0.35rem;
+  color: #1d1d1f;
+  font-size: 1.02rem;
+  font-weight: 700;
+}
+
+.card-subcopy,
+.pubg-card-desc,
+.power-subtitle,
+.stats-kd-hint,
+.match-filter-hint,
+.cup-history-subtitle {
+  color: #8e8e93 !important;
+  font-size: 0.78rem;
+  margin: 0 !important;
+  line-height: 1.45;
+}
+
+.card-heading-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.card-heading-stack .pubg-card-title,
+.card-heading-stack .cup-history-title {
+  margin: 0 !important;
+}
+
+.status-pill,
+.platform-pill,
+.match-count-pill {
+  border-radius: 0 !important;
+  border: 1px solid #dcdde3 !important;
+  background: #f4f4f8 !important;
+  color: #3a3a3c !important;
+  box-shadow: none !important;
+}
+
+.status-pill-success {
+  background: #edf7ee !important;
+  border-color: #cde7cf !important;
+  color: #2f6f34 !important;
+}
+
+.bind-meta,
+.bind-meta-featured,
+.hero-rebind,
+.match-filters,
+.power-metric-item,
+.stats-kpi-item,
+.cup-summary-item,
+.match-item,
+.match-item-detail,
+.stats-empty,
+.match-list-empty,
+.power-formula-section,
+.power-factor-item {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.bind-meta,
+.bind-meta-featured {
+  border: 1px solid #ececf1;
+  background: #fafafd !important;
+}
+
+.bind-meta-featured::after,
+.power-hero::after,
+.stats-kpi-item::before,
+.cup-summary-item::after {
+  display: none !important;
+}
+
+.bind-player-name {
+  color: #1d1d1f;
+  font-size: 1.2rem;
+}
+
+.bind-sync-note {
+  color: #8e8e93;
+}
+
+.pubg-card-power .power-hero {
+  grid-template-columns: minmax(0, 1fr) 170px !important;
+  padding: 0.8rem !important;
+  border-radius: 0 !important;
+  border: 1px solid #ececf1;
+  background: #fafafd !important;
+}
+
+.pubg-card-power .power-hero-score {
+  border-radius: 0 !important;
+  border: 1px solid #ececf1 !important;
+  background: #ffffff !important;
+  min-height: 8rem;
+}
+
+.pubg-card-power .power-score-label {
+  color: #8e8e93 !important;
+}
+
+.pubg-card-power .power-score-num {
+  color: #1d1d1f !important;
+}
+
+.pubg-card-power .power-score-caption {
+  color: #8e8e93;
+}
+
+.pubg-card-power .power-hero-level {
+  border-radius: 0 !important;
+}
+
+.power-metrics {
+  gap: 0.5rem;
+}
+
+.power-metric-item {
+  border: 1px solid #ececf1 !important;
+  background: #fafafd !important;
+}
+
+.power-metric-label {
+  color: #8e8e93 !important;
+}
+
+.power-metric-value {
+  color: #1d1d1f !important;
+}
+
+.stats-type-toggle {
+  border-radius: 0 !important;
+  border: 1px solid #ececf1;
+  background: #f6f6f9 !important;
+}
+
+.stats-type-toggle :deep(.el-button) {
+  border-radius: 0 !important;
+}
+
+.stats-type-toggle :deep(.el-button--primary),
+.stats-type-toggle :deep(.el-button--primary.is-plain) {
+  background: #ffffff !important;
+  box-shadow: none !important;
+}
+
+.stats-kpi-grid {
+  gap: 0.5rem;
+}
+
+.stats-kpi-item {
+  border: 1px solid #ececf1 !important;
+  background: #fafafd !important;
+  min-height: 4.5rem;
+  padding: 0.7rem 0.75rem;
+}
+
+.stats-kpi-label {
+  color: #8e8e93 !important;
+  padding-left: 0 !important;
+}
+
+.stats-kpi-value {
+  color: #1d1d1f !important;
+  font-size: 1.35rem;
+}
+
+.stats-kpi-foot {
+  color: #8e8e93 !important;
+}
+
+.match-filters {
+  border: 1px solid #ececf1 !important;
+  background: #fafafd !important;
+  padding: 0.6rem;
+}
+
+.match-filters :deep(.el-input__wrapper),
+.match-filters :deep(.el-select__wrapper) {
+  border-radius: 0 !important;
+  background: #fff !important;
+  box-shadow: 0 0 0 1px #e5e5ea inset !important;
+}
+
+.match-item {
+  border: 1px solid #ececf1 !important;
+  background: #fff !important;
+}
+
+.match-item-main {
+  padding: 0.75rem 0.8rem;
+}
+
+.match-item-rank {
+  border-radius: 0 !important;
+  background: #f2f2f7 !important;
+  color: #3a3a3c !important;
+}
+
+.match-item-rank.top3 {
+  background: #1d1d1f !important;
+  color: #fff !important;
+}
+
+.match-item-map,
+.match-member-col.stat {
+  color: #1d1d1f !important;
+}
+
+.match-tag,
+.match-metric {
+  border-radius: 0 !important;
+  border: 1px solid #ececf1 !important;
+  background: #fafafd !important;
+  color: #3a3a3c !important;
+}
+
+.match-item-detail {
+  border-top: 1px solid #ececf1 !important;
+  background: #fafafd !important;
+}
+
+.cup-summary-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.cup-summary-item {
+  border: 1px solid #ececf1 !important;
+  background: #fafafd !important;
+  padding: 0.7rem;
+}
+
+.cup-summary-value {
+  color: #1d1d1f !important;
+}
+
+.cup-summary-label {
+  color: #8e8e93 !important;
+}
+
+.cup-table-scroll {
+  border-radius: 0 !important;
+  border: 1px solid #ececf1;
+}
+
+.cup-table-scroll :deep(.el-table) {
+  border-radius: 0 !important;
+}
+
+.cup-table-scroll :deep(.el-table th.el-table__cell) {
+  background: #f7f7fa !important;
+  color: #6b6b73 !important;
+}
+
+.cup-table-scroll :deep(.el-table td.el-table__cell) {
+  color: #3a3a3c !important;
+}
+
+.power-formula-dialog :deep(.el-dialog),
+.avatar-crop-dialog :deep(.el-dialog) {
+  border-radius: 0 !important;
+}
+
+.power-formula-section {
+  border: 1px solid #ececf1 !important;
+  background: #fafafd !important;
+}
+
+.power-formula-equation {
+  border-radius: 0 !important;
+  background: #1d1d1f !important;
+}
+
+.power-rank-preview-grid {
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)) !important;
+}
+
+.power-rank-preview-card {
+  border-radius: 0 !important;
+}
+
+@media (max-width: 900px) {
+  .profile-info,
+  .pubg-content {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-info-avatar {
+    border-right: none !important;
+    border-bottom: 1px solid #f0f0f5 !important;
+  }
+
+  .pubg-card-power .power-hero {
+    grid-template-columns: 1fr !important;
+  }
+
+  .pubg-card-power .power-hero-level {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .cup-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .profile-container > .container {
+    padding: 0 0.65rem;
+  }
+
+  .profile-info-card :deep(.el-card__body),
+  .pubg-card :deep(.el-card__body),
+  .cup-history-card :deep(.el-card__body) {
+    padding: 0.8rem !important;
+  }
+
+  .avatar {
+    width: 104px !important;
+    height: 104px !important;
+  }
+
+  .card-title-row,
+  .match-card-top {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  .stats-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.dark-mode .profile-container {
+  background: #0f0f10 !important;
+}
+
+.dark-mode .profile-info-card,
+.dark-mode .pubg-card,
+.dark-mode .cup-history-card {
+  background: #1a1a1c !important;
+  border-color: #2a2a2e !important;
+}
+
+.dark-mode .profile-info-avatar,
+.dark-mode .bind-meta,
+.dark-mode .bind-meta-featured,
+.dark-mode .match-filters,
+.dark-mode .power-metric-item,
+.dark-mode .stats-kpi-item,
+.dark-mode .cup-summary-item,
+.dark-mode .match-item,
+.dark-mode .match-item-detail,
+.dark-mode .power-formula-section,
+.dark-mode .power-factor-item {
+  background: #202024 !important;
+  border-color: #2f2f35 !important;
+}
+
+.dark-mode .pubg-card-title,
+.dark-mode .cup-history-title,
+.dark-mode .user-details h2,
+.dark-mode .power-score-num,
+.dark-mode .stats-kpi-value,
+.dark-mode .cup-summary-value,
+.dark-mode .match-item-map {
+  color: #f5f5f7 !important;
+}
+
+.dark-mode .section-kicker,
+.dark-mode .profile-kicker,
+.dark-mode .profile-avatar-kicker,
+.dark-mode .card-subcopy,
+.dark-mode .pubg-card-desc,
+.dark-mode .power-subtitle,
+.dark-mode .stats-kd-hint,
+.dark-mode .match-filter-hint,
+.dark-mode .cup-history-subtitle,
+.dark-mode .stats-kpi-label,
+.dark-mode .stats-kpi-foot,
+.dark-mode .meta-label,
+.dark-mode .profile-avatar-hint {
+  color: #9a9aa1 !important;
+}
+
+.dark-mode .status-pill,
+.dark-mode .platform-pill,
+.dark-mode .match-count-pill,
+.dark-mode .user-meta-list p,
+.dark-mode .match-tag,
+.dark-mode .match-metric {
+  background: #232328 !important;
+  border-color: #303038 !important;
+  color: #d7d7dc !important;
+}
+
+/* Bind card compact layout refinement */
+.pubg-card-bind .panel-bind-info.panel-bind-info-compact {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  gap: 0.65rem !important;
+}
+
+.pubg-card-bind .panel-bind-info.panel-bind-info-compact .bind-meta.bind-meta-featured {
+  width: 100%;
+  padding: 0.8rem 0.85rem !important;
+  border: 1px solid #e5e5ea !important;
+  background: #fafafd !important;
+  min-height: 6.6rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.pubg-card-bind .panel-bind-info.panel-bind-info-compact .bind-meta-featured::after {
+  display: none !important;
+}
+
+.pubg-card-bind .bind-meta-label {
+  font-size: 0.69rem;
+  letter-spacing: 0.07em;
+}
+
+.pubg-card-bind .bind-player-name {
+  margin-top: 0.25rem;
+  font-size: 1.1rem;
+  line-height: 1.2;
+  word-break: break-word;
+}
+
+.pubg-card-bind .bind-platform-line {
+  margin-top: 0.55rem;
+  gap: 0.45rem;
+}
+
+.pubg-card-bind .bind-action-row {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 0.45rem !important;
+  width: 100%;
+  margin-top: auto;
+}
+
+.pubg-card-bind .bind-action-row .el-button {
+  margin: 0 !important;
+  width: 100%;
+  min-width: 0;
+  padding: 0.5rem 0.35rem !important;
+  font-size: 0.78rem;
+}
+
+.pubg-card-bind .hero-rebind {
+  margin-top: 0.2rem;
+  border: 1px solid #e5e5ea !important;
+  background: #fafafd !important;
+  padding: 0.75rem !important;
+}
+
+@media (max-width: 768px) {
+  .pubg-card-bind .bind-action-row {
+    grid-template-columns: 1fr !important;
+  }
+
+  .pubg-card-bind .bind-action-row .el-button {
+    padding: 0.55rem 0.45rem !important;
+  }
+}
+
+.dark-mode .pubg-card-bind .panel-bind-info.panel-bind-info-compact .bind-meta.bind-meta-featured,
+.dark-mode .pubg-card-bind .hero-rebind {
+  border-color: #2f2f35 !important;
+  background: #202024 !important;
+}
+
+/* PUBG official fields oriented match card */
+.pubg-card-matches .match-item-rank {
+  width: 3.1rem;
+  height: 3.1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.1rem;
+}
+
+.pubg-card-matches .match-rank-num {
+  line-height: 1;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.pubg-card-matches .match-rank-label {
+  font-size: 0.54rem;
+  font-weight: 700;
+  color: inherit;
+  opacity: 0.78;
+  letter-spacing: 0.04em;
+}
+
+.pubg-card-matches .match-item-row-sub {
+  margin-top: 0.28rem;
+}
+
+.pubg-card-matches .match-item-row-meta {
+  margin-top: 0.32rem;
+  justify-content: flex-start;
+  gap: 0.42rem;
+  flex-wrap: wrap;
+}
+
+.pubg-card-matches .match-item-meta {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.12rem 0.42rem;
+  border: 1px solid #ececf1;
+  background: #fafafd;
+  color: #6b6b73;
+  font-size: 0.66rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.pubg-card-matches .match-item-metrics {
+  gap: 0.3rem;
+}
+
+.pubg-card-matches .match-metric {
+  min-width: 3.35rem;
+  justify-content: center;
+}
+
+.pubg-card-matches .match-metric em {
+  margin-right: 0.2rem;
+  font-size: 0.6rem;
+  font-weight: 700;
+}
+
+@media (max-width: 480px) {
+  .pubg-card-matches .match-item-row-meta {
+    margin-top: 0.26rem;
+    gap: 0.28rem;
+  }
+
+  .pubg-card-matches .match-item-meta {
+    font-size: 0.62rem;
+    padding: 0.1rem 0.35rem;
+  }
+
+  .pubg-card-matches .match-item-metrics {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+}
+
+.dark-mode .pubg-card-matches .match-item-meta {
+  border-color: #303038;
+  background: #232328;
+  color: #b9b9bf;
+}
+
+/* Rank style redesign v3: cleaner tier plate */
+.pubg-card-power .power-hero {
+  grid-template-columns: minmax(0, 1fr) 182px !important;
+  align-items: center !important;
+}
+
+.pubg-card-power .power-level-orbit {
+  display: none !important;
+}
+
+.pubg-card-power .power-hero-level,
+.power-rank-preview-card {
+  position: relative;
+  isolation: isolate;
+  display: grid !important;
+  grid-template-rows: auto 1fr auto;
+  align-items: center;
+  justify-items: center;
+  overflow: hidden;
+  border-radius: 0 !important;
+  border: 1px solid color-mix(in srgb, var(--rank-accent-v3) 38%, #000 62%) !important;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--rank-base-v3) 90%, #fff 10%) 0%, var(--rank-base-v3) 100%) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 8px 18px color-mix(in srgb, var(--rank-accent-v3) 26%, transparent) !important;
+}
+
+.pubg-card-power .power-hero-level {
+  width: 182px;
+  min-width: 182px !important;
+  min-height: 8rem !important;
+  padding: 0.75rem 0.7rem !important;
+}
+
+.power-rank-preview-card {
+  min-height: 7.2rem !important;
+  padding: 0.66rem 0.58rem !important;
+}
+
+.pubg-card-power .power-hero-level::before,
+.power-rank-preview-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 0.28rem;
+  background: linear-gradient(90deg, var(--rank-accent-v3), var(--rank-soft-v3), var(--rank-accent-v3));
+}
+
+.pubg-card-power .power-hero-level::after,
+.power-rank-preview-card::after {
+  content: '';
+  position: absolute;
+  inset: auto -2.4rem -2.2rem auto;
+  width: 6.2rem;
+  height: 6.2rem;
+  background: radial-gradient(circle, color-mix(in srgb, var(--rank-accent-v3) 28%, transparent), transparent 68%);
+  border-radius: 50%;
+}
+
+.pubg-card-power .power-hero-level-label,
+.power-rank-preview-card .power-hero-level-label {
+  justify-self: stretch;
+  margin: 0;
+  padding: 0.18rem 0.42rem;
+  border-radius: 0 !important;
+  background: rgba(0, 0, 0, 0.2) !important;
+  color: rgba(255, 255, 255, 0.75) !important;
+  font-size: 0.62rem !important;
+  letter-spacing: 0.08em !important;
+  text-align: center;
+}
+
+.pubg-card-power .power-hero-level-value,
+.power-rank-preview-card .power-hero-level-value {
+  margin: 0.18rem 0 !important;
+  color: #fff !important;
+  font-size: clamp(2.1rem, 4vw, 2.7rem) !important;
+  font-weight: 900 !important;
+  letter-spacing: -0.06em !important;
+  line-height: 0.95 !important;
+  text-shadow: 0 8px 16px rgba(0, 0, 0, 0.32) !important;
+}
+
+.pubg-card-power .power-rank-demon-s .power-hero-level-value,
+.power-rank-preview-card.power-rank-demon-s .power-hero-level-value {
+  font-size: clamp(1.48rem, 3vw, 1.9rem) !important;
+}
+
+.pubg-card-power .power-hero-level-desc,
+.power-rank-preview-card .power-hero-level-desc {
+  margin: 0 !important;
+  padding: 0.2rem 0.48rem !important;
+  border-radius: 0 !important;
+  border: 1px solid color-mix(in srgb, var(--rank-soft-v3) 45%, transparent) !important;
+  background: rgba(0, 0, 0, 0.24) !important;
+  color: color-mix(in srgb, var(--rank-soft-v3) 80%, #fff 20%) !important;
+  font-size: 0.66rem !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.05em !important;
+  white-space: nowrap;
+}
+
+.pubg-card-power .power-rank-empty,
+.pubg-card-power .power-rank-e,
+.power-rank-preview-card.power-rank-empty,
+.power-rank-preview-card.power-rank-e {
+  --rank-base-v3: #24262b;
+  --rank-accent-v3: #7f8590;
+  --rank-soft-v3: #b0b5bf;
+}
+
+.pubg-card-power .power-rank-d,
+.power-rank-preview-card.power-rank-d {
+  --rank-base-v3: #20242b;
+  --rank-accent-v3: #8f96a3;
+  --rank-soft-v3: #bec4cf;
+}
+
+.pubg-card-power .power-rank-c,
+.power-rank-preview-card.power-rank-c {
+  --rank-base-v3: #1d222a;
+  --rank-accent-v3: #9ea6b5;
+  --rank-soft-v3: #c8ced8;
+}
+
+.pubg-card-power .power-rank-b,
+.power-rank-preview-card.power-rank-b {
+  --rank-base-v3: #1a2028;
+  --rank-accent-v3: #afb8c8;
+  --rank-soft-v3: #d2d8e2;
+}
+
+.pubg-card-power .power-rank-a,
+.power-rank-preview-card.power-rank-a {
+  --rank-base-v3: #171d25;
+  --rank-accent-v3: #c0cad9;
+  --rank-soft-v3: #dce2eb;
+}
+
+.pubg-card-power .power-rank-s,
+.power-rank-preview-card.power-rank-s {
+  --rank-base-v3: #141b22;
+  --rank-accent-v3: #d3dce8;
+  --rank-soft-v3: #edf1f6;
+}
+
+.pubg-card-power .power-rank-demon-s,
+.power-rank-preview-card.power-rank-demon-s {
+  --rank-base-v3: #10171e;
+  --rank-accent-v3: #e9eef5;
+  --rank-soft-v3: #ffffff;
+}
+
+.power-rank-preview-grid {
+  grid-template-columns: repeat(auto-fit, minmax(126px, 1fr)) !important;
+}
+
+@media (max-width: 768px) {
+  .pubg-card-power .power-hero {
+    grid-template-columns: 1fr !important;
+  }
+
+  .pubg-card-power .power-hero-level {
+    width: 100%;
+    min-width: 0 !important;
+  }
 }
 
 </style>
