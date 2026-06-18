@@ -17,6 +17,9 @@ class AuthController {
     if (!username || !String(username).trim()) {
       return res.status(400).json({ error: '昵称不能为空' });
     }
+    if (!realName || !String(realName).trim()) {
+      return res.status(400).json({ error: '真实姓名不能为空' });
+    }
     if (!password) {
       return res.status(400).json({ error: '密码不能为空' });
     }
