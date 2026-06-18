@@ -21,17 +21,19 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        // 代码分割配置
-        manualChunks: {
-          // 将第三方库分离到单独的代码块
-          'vendor': ['vue', 'element-plus'],
-          'chat': ['./src/components/chat/Chat.vue'],
-          'profile': ['./src/components/profile/Profile.vue']
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return
+          if (id.includes('element-plus')) return 'element-plus'
+          if (id.includes('vue-router')) return 'vue-router'
+          if (id.includes('pinia')) return 'pinia'
+          if (id.includes('/vue/') || id.includes('/@vue/')) return 'vue-core'
         }
       }
     },
     // 启用CSS代码分割
     cssCodeSplit: true,
+    // 弱网环境：略提高压缩门槛，减小首屏 JS 体积
+    chunkSizeWarningLimit: 600,
     // 生成sourcemap用于调试
     sourcemap: false
   }

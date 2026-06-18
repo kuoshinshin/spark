@@ -103,3 +103,50 @@ cd /opt/spark && bash deploy/aliyun-ecs.sh
 ## 五、PM2
 
 进程名：`xinghuo-api`。常用：`pm2 logs xinghuo-api`、`pm2 status`。
+
+---
+
+## 六、香港机房 · 大陆访问优化
+
+腾讯云香港轻量对大陆无「回国专线」保证，无法做到与备案大陆机房同等稳定，但可按下面步骤减轻弱网影响。
+
+### 1. DNS（阿里云解析）
+
+- `@`、`www` 使用 **A 记录** 直连服务器 IP（`101.32.221.4`），**不要** 走 Cloudflare 橙云代理。
+- TTL 设为 **10 分钟**，便于以后换 IP。
+- 暂不要用 URL 转发、境内 CDN（未备案域名通常无法完整使用）。
+
+### 2. 服务器网络调优（BBR）
+
+```bash
+cd /opt/spark
+sudo bash deploy/hk-mainland-tune.sh
+```
+
+### 3. Nginx 压缩与静态缓存
+
+在 `/etc/nginx/conf.d/spark.conf` 的 **443 server** 块内（`server_name sparksquad.club` 那段）加入：
+
+```nginx
+include /opt/spark/deploy/nginx-hk-tuning.conf;
+```
+
+若已有 `location /api/`、`location /uploads/`，请**删除重复块**，只保留 tuning 文件里的一份，或把 tuning 文件中的 location 合并进现有配置。
+
+然后：
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### 4. 前端
+
+- 构建产物已拆分 `element-plus` / `vue` 等 chunk，减轻首屏体积。
+- `sw.js` 会缓存 `/assets/` 等静态文件，二次打开更快。
+
+更新代码后照常 `bash deploy/aliyun-ecs.sh` 即可。
+
+### 5. 用户侧建议
+
+- 联通/移动用户通常比电信晚高峰更稳定；可提示用户换网络或避开 20:00–23:00。
+- 长期要以大陆用户为主且要求稳定，仍需 **ICP 备案 + 大陆机房**。
