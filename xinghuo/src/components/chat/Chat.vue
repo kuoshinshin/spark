@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { chatApi, userApi, notificationApi } from '../../services/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { DEFAULT_AVATAR, normalizeAvatar, avatarDisplayUrl } from '../../utils/avatar'
+import { calcMomentsImageSize, getMomentsImageLimits, getMomentsImageStyle } from '../../utils/momentsImage'
 
 const route = useRoute()
 const router = useRouter()
@@ -115,6 +116,8 @@ const postContent = ref('')
 const postMedia = ref('')
 const mediaType = ref('image') // image 图片, video 视频
 const isPosting = ref(false)
+const postMediaUploading = ref(false)
+const postImageInputRef = ref(null)
 
 // 评论相关
 const commentInputs = ref({})
@@ -126,6 +129,8 @@ const editContent = ref('')
 const editMedia = ref('')
 const editMediaType = ref('image')
 const isEditing = ref(false)
+const editMediaUploading = ref(false)
+const editImageInputRef = ref(null)
 
 // 评论点赞相关
 const commentLikes = ref({})
@@ -250,6 +255,79 @@ const resetPostModalForm = () => {
   postContent.value = ''
   postMedia.value = ''
   mediaType.value = 'image'
+  postMediaUploading.value = false
+  if (postImageInputRef.value) postImageInputRef.value.value = ''
+}
+
+const mediaDisplayUrl = (url) => avatarDisplayUrl(url)
+
+const postImageSizes = ref({})
+
+const rememberImageSize = (key, event) => {
+  const img = event?.target
+  if (!img?.naturalWidth || !img?.naturalHeight) return
+  postImageSizes.value = {
+    ...postImageSizes.value,
+    [key]: calcMomentsImageSize(img.naturalWidth, img.naturalHeight, getMomentsImageLimits()),
+  }
+}
+
+const onPostImageLoad = (postId, event) => rememberImageSize(`post-${postId}`, event)
+const onComposeImageLoad = (key, event) => rememberImageSize(key, event)
+const getPostImageStyle = (postId) => getMomentsImageStyle(postImageSizes.value[`post-${postId}`])
+const getComposeImageStyle = (key) => getMomentsImageStyle(postImageSizes.value[key])
+
+const uploadPostImage = async (file, target) => {
+  if (!file) return
+  const uploadingRef = target === 'edit' ? editMediaUploading : postMediaUploading
+  const mediaRef = target === 'edit' ? editMedia : postMedia
+  const typeRef = target === 'edit' ? editMediaType : mediaType
+  uploadingRef.value = true
+  try {
+    const response = await chatApi.uploadPostMedia(file)
+    mediaRef.value = response.url || response.media || ''
+    typeRef.value = 'image'
+    ElMessage.success('图片上传成功')
+  } catch (error) {
+    console.error('上传帖子图片失败:', error)
+    ElMessage.error(error?.message || '上传图片失败')
+  } finally {
+    uploadingRef.value = false
+  }
+}
+
+const onPostImageSelected = async (event) => {
+  const file = event.target?.files?.[0]
+  if (!file) return
+  await uploadPostImage(file, 'post')
+  if (postImageInputRef.value) postImageInputRef.value.value = ''
+}
+
+const onEditImageSelected = async (event) => {
+  const file = event.target?.files?.[0]
+  if (!file) return
+  await uploadPostImage(file, 'edit')
+  if (editImageInputRef.value) editImageInputRef.value.value = ''
+}
+
+const clearPostImage = () => {
+  postMedia.value = ''
+  if (postImageInputRef.value) postImageInputRef.value.value = ''
+}
+
+const clearEditImage = () => {
+  editMedia.value = ''
+  if (editImageInputRef.value) editImageInputRef.value.value = ''
+}
+
+const switchMediaType = (type, target = 'post') => {
+  if (target === 'edit') {
+    editMediaType.value = type
+    if (type === 'video') clearEditImage()
+    return
+  }
+  mediaType.value = type
+  if (type === 'video') clearPostImage()
 }
 
 const closePostModal = () => {
@@ -271,6 +349,8 @@ const resetEditModalForm = () => {
   editMedia.value = ''
   editMediaType.value = 'image'
   isEditing.value = false
+  editMediaUploading.value = false
+  if (editImageInputRef.value) editImageInputRef.value.value = ''
 }
 
 const closeEditModal = () => {
@@ -1051,13 +1131,19 @@ watch(
                 <!-- 帖子内容 -->
                 <div class="post-content">
                   <p>{{ post.content }}</p>
-                  <div v-if="post.media" class="post-media-container">
+                  <div v-if="post.media" class="post-media-container moments-media">
                     <el-image
                       v-if="post.mediaType === 'image'"
-                      :src="post.media"
+                      :src="mediaDisplayUrl(post.media)"
+                      :preview-src-list="[mediaDisplayUrl(post.media)]"
+                      preview-teleported
                       :alt="post.content"
                       fit="cover"
+                      loading="lazy"
                       class="post-media image"
+                      :style="getPostImageStyle(post.id)"
+                      title="点击查看大图"
+                      @load="(event) => onPostImageLoad(post.id, event)"
                     />
                     <video v-else-if="post.mediaType === 'video'" :src="post.media" class="post-media video" controls></video>
                   </div>
@@ -1225,7 +1311,7 @@ watch(
               text
               class="media-type-button"
               :class="{ active: mediaType === 'image' }"
-              @click="mediaType = 'image'"
+              @click="switchMediaType('image')"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M19 3H5C3.89543 3 3 3.89543 3 5V19C3 20.1046 3.89543 21 5 21H19C20.1046 21 21 20.1046 21 19V5C21 3.89543 20.1046 3 19 3Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -1238,7 +1324,7 @@ watch(
               text
               class="media-type-button"
               :class="{ active: mediaType === 'video' }"
-              @click="mediaType = 'video'"
+              @click="switchMediaType('video')"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M21 3H3C1.89543 3 1 3.89543 1 5V19C1 20.1046 1.89543 21 3 21H21C22.1046 21 23 20.1046 23 19V5C23 3.89543 22.1046 3 21 3Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -1247,9 +1333,46 @@ watch(
               视频
             </el-button>
           </div>
+
+          <template v-if="mediaType === 'image'">
+            <input
+              ref="postImageInputRef"
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif"
+              class="hidden-file-input"
+              @change="onPostImageSelected"
+            />
+            <div class="media-upload-actions">
+              <el-button class="media-pick-button" :loading="postMediaUploading" @click="postImageInputRef?.click()">
+                {{ postMediaUploading ? '上传中...' : '选择本地图片' }}
+              </el-button>
+              <span class="media-upload-hint">支持 JPG / PNG / WebP / GIF，最大 5MB</span>
+            </div>
+            <div v-if="postMedia" class="post-media-preview moments-media">
+              <el-image
+                :src="mediaDisplayUrl(postMedia)"
+                :preview-src-list="[mediaDisplayUrl(postMedia)]"
+                preview-teleported
+                fit="cover"
+                class="preview-image"
+                :style="getComposeImageStyle('compose-post')"
+                title="点击查看大图"
+                @load="(event) => onComposeImageLoad('compose-post', event)"
+              />
+              <el-button text type="danger" @click="clearPostImage">移除图片</el-button>
+            </div>
+            <el-input
+              v-model="postMedia"
+              placeholder="或输入图片链接（可选）"
+              clearable
+              class="media-url-input"
+            />
+          </template>
+
           <el-input
+            v-else
             v-model="postMedia"
-            :placeholder="mediaType === 'image' ? '输入图片URL（可选）' : '输入视频URL（可选）'"
+            placeholder="输入视频URL（可选）"
             clearable
             class="media-url-input"
           />
@@ -1261,7 +1384,7 @@ watch(
           type="primary"
           class="publish-button"
           :loading="isPosting"
-          :disabled="!postContent.trim()"
+          :disabled="!postContent.trim() || postMediaUploading"
           @click="publishPost"
         >
           {{ isPosting ? '发布中...' : '发布' }}
@@ -1297,7 +1420,7 @@ watch(
               text
               class="media-type-button"
               :class="{ active: editMediaType === 'image' }"
-              @click="editMediaType = 'image'"
+              @click="switchMediaType('image', 'edit')"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M19 3H5C3.89543 3 3 3.89543 3 5V19C3 20.1046 3.89543 21 5 21H19C20.1046 21 21 20.1046 21 19V5C21 3.89543 20.1046 3 19 3Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -1310,7 +1433,7 @@ watch(
               text
               class="media-type-button"
               :class="{ active: editMediaType === 'video' }"
-              @click="editMediaType = 'video'"
+              @click="switchMediaType('video', 'edit')"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M21 3H3C1.89543 3 1 3.89543 1 5V19C1 20.1046 1.89543 21 3 21H21C22.1046 21 23 20.1046 23 19V5C23 3.89543 22.1046 3 21 3Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -1319,9 +1442,46 @@ watch(
               视频
             </el-button>
           </div>
+
+          <template v-if="editMediaType === 'image'">
+            <input
+              ref="editImageInputRef"
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif"
+              class="hidden-file-input"
+              @change="onEditImageSelected"
+            />
+            <div class="media-upload-actions">
+              <el-button class="media-pick-button" :loading="editMediaUploading" @click="editImageInputRef?.click()">
+                {{ editMediaUploading ? '上传中...' : '选择本地图片' }}
+              </el-button>
+              <span class="media-upload-hint">支持 JPG / PNG / WebP / GIF，最大 5MB</span>
+            </div>
+            <div v-if="editMedia" class="post-media-preview moments-media">
+              <el-image
+                :src="mediaDisplayUrl(editMedia)"
+                :preview-src-list="[mediaDisplayUrl(editMedia)]"
+                preview-teleported
+                fit="cover"
+                class="preview-image"
+                :style="getComposeImageStyle('compose-edit')"
+                title="点击查看大图"
+                @load="(event) => onComposeImageLoad('compose-edit', event)"
+              />
+              <el-button text type="danger" @click="clearEditImage">移除图片</el-button>
+            </div>
+            <el-input
+              v-model="editMedia"
+              placeholder="或输入图片链接（可选）"
+              clearable
+              class="media-url-input"
+            />
+          </template>
+
           <el-input
+            v-else
             v-model="editMedia"
-            :placeholder="editMediaType === 'image' ? '输入图片URL（可选）' : '输入视频URL（可选）'"
+            placeholder="输入视频URL（可选）"
             clearable
             class="media-url-input"
           />
@@ -1333,7 +1493,7 @@ watch(
           type="primary"
           class="publish-button"
           :loading="isEditing"
-          :disabled="!editContent.trim()"
+          :disabled="!editContent.trim() || editMediaUploading"
           @click="saveEdit"
         >
           {{ isEditing ? '保存中...' : '保存' }}
@@ -1762,24 +1922,38 @@ watch(
   text-align: left;
 }
 
-.post-media-container {
-  margin-top: 1rem;
-  border-radius: 12px;
+.post-media-container.moments-media {
+  margin-top: 0.75rem;
+  display: inline-block;
+  max-width: 100%;
+  border-radius: 4px;
   overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  background-color: #f5f5f7;
+  background-color: #f7f7f7;
+  box-shadow: none;
+  line-height: 0;
 }
 
 .post-media.image.el-image {
-  width: 100%;
   display: block;
+  cursor: zoom-in;
   vertical-align: top;
 }
 
+.post-media.image :deep(.el-image__wrapper),
 .post-media.image :deep(.el-image__inner) {
-  width: 100%;
-  max-height: 400px;
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
+
+.post-media.image :deep(.el-image__inner) {
   object-fit: cover;
+}
+
+.post-media.image :deep(.el-image__placeholder),
+.post-media.image :deep(.el-image__error) {
+  width: 200px;
+  height: 200px;
 }
 
 .post-media.video {
@@ -2195,6 +2369,64 @@ watch(
 
 .media-url-input {
   width: 100%;
+}
+
+.hidden-file-input {
+  display: none;
+}
+
+.media-upload-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.media-pick-button.el-button {
+  min-width: 132px;
+  height: 36px;
+  padding: 0 20px;
+  font-size: 0.875rem;
+  letter-spacing: 0.02em;
+}
+
+.media-upload-hint {
+  font-size: 0.8125rem;
+  color: #86868b;
+}
+
+.post-media-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.post-media-preview.moments-media {
+  display: inline-block;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #f7f7f7;
+}
+
+.preview-image {
+  display: block;
+  cursor: zoom-in;
+  border-radius: 4px;
+  overflow: hidden;
+  border: none;
+  background: #f7f7f7;
+}
+
+.preview-image :deep(.el-image__wrapper),
+.preview-image :deep(.el-image__inner) {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
+
+.preview-image :deep(.el-image__inner) {
+  object-fit: cover;
 }
 
 .media-upload-section {

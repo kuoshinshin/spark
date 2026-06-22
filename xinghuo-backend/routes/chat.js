@@ -1,7 +1,22 @@
 const express = require('express');
 const ChatController = require('../controllers/chatController');
 const { verifyToken } = require('../middleware/auth');
+const { postMediaUpload } = require('../middleware/uploadPostMedia');
 const router = express.Router();
+
+const handlePostMediaUpload = (req, res, next) => {
+  postMediaUpload.single('media')(req, res, (err) => {
+    if (err) {
+      let msg = err.message || '上传失败';
+      if (err.code === 'LIMIT_FILE_SIZE') msg = '图片大小不能超过 5MB';
+      return res.status(400).json({ error: msg });
+    }
+    next();
+  });
+};
+
+// 上传帖子图片（需要认证）
+router.post('/media', verifyToken, handlePostMediaUpload, ChatController.uploadMedia);
 
 // 发送消息（需要认证）
 router.post('/send', verifyToken, ChatController.sendMessage);

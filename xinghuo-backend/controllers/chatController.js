@@ -1,7 +1,27 @@
 const ChatModel = require('../models/chatModel');
 const NotificationModel = require('../models/notificationModel');
+const fs = require('fs');
 
 class ChatController {
+  // 上传圈子帖子图片
+  static async uploadMedia(req, res) {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: '请选择要上传的图片' });
+      }
+      const publicPath = `/uploads/posts/${req.file.filename}`;
+      res.json({ message: '上传成功', url: publicPath, media: publicPath });
+    } catch (error) {
+      console.error('上传帖子图片失败:', error);
+      if (req.file?.path) {
+        try {
+          await fs.promises.unlink(req.file.path);
+        } catch (_) {}
+      }
+      res.status(500).json({ error: '上传帖子图片失败，请稍后重试' });
+    }
+  }
+
   // 发送消息（支持媒体）
   static async sendMessage(req, res) {
     try {
