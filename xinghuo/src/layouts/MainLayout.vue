@@ -99,6 +99,7 @@ watch(
             <el-menu-item index="/">首页</el-menu-item>
             <el-menu-item index="/chat">圈子</el-menu-item>
             <el-menu-item index="/match">比赛</el-menu-item>
+            <el-menu-item index="/bean-lobby">豆子局</el-menu-item>
             <el-menu-item index="/profile">个人</el-menu-item>
             <el-menu-item v-if="isAdmin" index="/directory">后台</el-menu-item>
             <el-menu-item v-if="ui.canInstallPWA" index="install">

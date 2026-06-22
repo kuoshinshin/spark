@@ -38,6 +38,16 @@ const router = createRouter({
           component: () => import('../components/match/Match.vue')
         },
         {
+          path: 'bean-lobby',
+          name: 'beanLobby',
+          component: () => import('../components/bean/BeanLobby.vue')
+        },
+        {
+          path: 'bean-lobby/table/:tableId',
+          name: 'beanTableDetail',
+          component: () => import('../components/bean/BeanTableDetail.vue')
+        },
+        {
           path: 'profile',
           name: 'profile',
           component: () => import('../components/profile/Profile.vue')

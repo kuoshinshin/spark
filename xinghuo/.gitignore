@@ -28,6 +28,11 @@ dist-ssr
 .env.local
 .env.*.local
 
+# 本地 mock 夹具（见 src/mock/*.fixture.example.js 模板）
+src/mock/*.fixture.js
+!src/mock/*.fixture.example.js
+mock-data/
+
 # Build files
 build/
 out/

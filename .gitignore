@@ -25,3 +25,11 @@ Thumbs.db
 # 临时
 *.swp
 *.swo
+
+# 本地测试数据 / mock 夹具（默认不提交；仅 *.example.* 模板入库）
+**/mock-data/
+!**/mock-data.example/**
+**/*.fixture.js
+!**/*.fixture.example.js
+**/fixtures.local.*
+**/mock.local.*

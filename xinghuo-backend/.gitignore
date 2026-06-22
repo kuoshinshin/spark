@@ -3,3 +3,10 @@ node_modules
 *.log
 uploads/avatars/*
 !uploads/avatars/.gitkeep
+uploads/posts/*
+!uploads/posts/.gitkeep
+
+# 本地 mock 数据目录
+mock-data/
+**/*.fixture.js
+!**/*.fixture.example.js

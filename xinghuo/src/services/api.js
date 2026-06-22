@@ -199,6 +199,30 @@ export const chatApi = {
       body: JSON.stringify(messageData),
     });
   },
+
+  // 上传圈子帖子图片
+  uploadPostMedia: async (file) => {
+    const base = resolveApiBaseUrl();
+    const token = typeof localStorage !== 'undefined' ? (localStorage.getItem('token') || '') : '';
+    const form = new FormData();
+    form.append('media', file);
+    const res = await fetch(`${base}/chat/media`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    const data = res.headers.get('content-type')?.includes('application/json')
+      ? await res.json()
+      : null;
+    if (!res.ok) {
+      const msg = (data && data.error) || '上传图片失败';
+      if (res.status === 401 || res.status === 403) {
+        triggerUnauthorized();
+      }
+      throw new Error(msg);
+    }
+    return data;
+  },
   
   // 点赞帖子
   likePost: async (postId) => {
@@ -345,6 +369,45 @@ export const eventApi = {
     invalidateCacheByEndpoints(['/events/current']);
     return data;
   },
+};
+
+// 豆子局大厅 API
+export const beanApi = {
+  listTables: async () => request('/bean-lobby/tables', { skipCache: true }),
+  createTable: async (payload) => request('/bean-lobby/tables', {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+  }),
+  getTable: async (tableId) => request(`/bean-lobby/tables/${tableId}`, { skipCache: true }),
+  joinTable: async (tableId, payload) => request(`/bean-lobby/tables/${tableId}/join`, {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+  }),
+  leaveTable: async (tableId) => request(`/bean-lobby/tables/${tableId}/leave`, { method: 'POST' }),
+  startSession: async (tableId) => request(`/bean-lobby/tables/${tableId}/start`, { method: 'POST' }),
+  substitute: async (tableId, payload) => request(`/bean-lobby/tables/${tableId}/substitute`, {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+  }),
+  transferOwner: async (tableId, targetUserId) => request(`/bean-lobby/tables/${tableId}/transfer-owner`, {
+    method: 'POST',
+    body: JSON.stringify({ targetUserId }),
+  }),
+  getSession: async (sessionId) => request(`/bean-lobby/sessions/${sessionId}`, { skipCache: true }),
+  refreshAuto: async (sessionId, payload) => request(`/bean-lobby/sessions/${sessionId}/refresh-auto`, {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+  }),
+  pollSession: async (sessionId) => request(`/bean-lobby/sessions/${sessionId}/poll`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  }),
+  updateManualPlayers: async (sessionId, players, roundId) => request(`/bean-lobby/sessions/${sessionId}/players`, {
+    method: 'PUT',
+    body: JSON.stringify({ players, roundId }),
+  }),
+  confirm: async (sessionId) => request(`/bean-lobby/sessions/${sessionId}/confirm`, { method: 'POST' }),
+  reopen: async (sessionId) => request(`/bean-lobby/sessions/${sessionId}/reopen`, { method: 'POST' }),
 };
 
 // 用户相关 API
