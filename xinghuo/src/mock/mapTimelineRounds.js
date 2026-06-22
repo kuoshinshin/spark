@@ -19,6 +19,19 @@ export function mapTimelineRounds(rounds, players = []) {
         name: nameById.get(Number(p.userId)) || `玩家${p.userId}`,
         netBeans: Number(p.netBeans || 0),
       }))
+      const playerStats = (round.players || []).map((p) => ({
+        userId: p.userId,
+        name: nameById.get(Number(p.userId)) || `玩家${p.userId}`,
+        damage: Number(p.damage || 0),
+        kills: Number(p.kills || 0),
+        tail: p.tail ?? '-',
+        teamNo: p.teamNo ?? null,
+      }))
+      const rollPoints = (summary.rollPoints || []).map((item) => ({
+        player: item.player || nameById.get(Number(item.userId)) || `玩家${item.userId}`,
+        point: item.point ?? '-',
+        result: item.result || '-',
+      }))
       return {
         id: round.id,
         roundNo: round.roundNo,
@@ -33,6 +46,9 @@ export function mapTimelineRounds(rounds, players = []) {
         beanDelta: summary.winner ? `${summary.winner}队 +${summary.beanTotal || 0}` : '0',
         note: summary.multiplied ? '吃鸡翻倍' : '常规结算',
         beanItems,
+        playerStats,
+        needsRandom: Boolean(summary.needsRandom),
+        rollPoints,
         isMock: Boolean(round.isMock),
       }
     })

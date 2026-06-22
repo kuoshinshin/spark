@@ -683,6 +683,28 @@ onUnmounted(() => {
                   <p class="timeline-row">地图：{{ round.mapName }} · Match #{{ round.matchId }}</p>
                   <p class="timeline-row">尾数：{{ round.tails }}</p>
                   <p class="timeline-row">分组：{{ round.grouping }}</p>
+                  <div v-if="round.playerStats?.length" class="round-stats-grid">
+                    <div
+                      v-for="stat in round.playerStats"
+                      :key="`${round.id}-stat-${stat.userId}`"
+                      class="round-stat-chip"
+                    >
+                      <strong>{{ stat.name }}</strong>
+                      <span>伤害 {{ stat.damage }} · 击杀 {{ stat.kills }} · 尾数 {{ stat.tail }}</span>
+                    </div>
+                  </div>
+                  <div v-if="round.needsRandom && round.rollPoints?.length" class="round-roll-box">
+                    <div class="roll-label">同分 Roll 点</div>
+                    <div class="roll-items">
+                      <span
+                        v-for="(roll, rollIdx) in round.rollPoints"
+                        :key="`${round.id}-roll-${rollIdx}`"
+                        class="roll-chip"
+                      >
+                        {{ roll.player }}：{{ roll.point }} 点（{{ roll.result }}）
+                      </span>
+                    </div>
+                  </div>
                   <p class="timeline-row">
                     击杀：{{ round.killsA }} : {{ round.killsB }}
                     → <span class="bean-delta">{{ round.beanDelta }}</span>
@@ -971,6 +993,49 @@ onUnmounted(() => {
 .timeline-row { margin: 0.2rem 0; font-size: 0.8rem; color: #475569; line-height: 1.4; }
 .timeline-note { color: #94a3b8; font-size: 0.76rem; }
 .round-beans { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.5rem; }
+.round-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(140px, 1fr));
+  gap: 0.45rem;
+  margin: 0.45rem 0;
+}
+.round-stat-chip {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 0.4rem 0.55rem;
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+.round-stat-chip strong {
+  display: block;
+  color: #1e293b;
+  margin-bottom: 0.1rem;
+  font-size: 0.8rem;
+}
+.round-stat-chip span { color: #64748b; }
+.round-roll-box {
+  margin: 0.35rem 0 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  background: #fff7ed;
+  border: 1px dashed #fdba74;
+}
+.roll-label {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: #c2410c;
+  margin-bottom: 0.35rem;
+}
+.roll-items { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.roll-chip {
+  font-size: 0.75rem;
+  color: #9a3412;
+  background: #fff;
+  border: 1px solid #fed7aa;
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+}
 .round-bean-chip {
   font-size: 0.76rem;
   font-weight: 600;
@@ -1018,5 +1083,6 @@ onUnmounted(() => {
   .detail-head { flex-direction: column; }
   .kpi-grid { grid-template-columns: 1fr; }
   .guide-steps { grid-template-columns: 1fr; }
+  .round-stats-grid { grid-template-columns: 1fr; }
 }
 </style>

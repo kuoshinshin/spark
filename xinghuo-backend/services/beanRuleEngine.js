@@ -161,6 +161,21 @@ function calcBeans(teamA, teamB) {
   };
 }
 
+function buildRollPoints(players, teamA, teamB, seed = Date.now()) {
+  const teamAIds = new Set((teamA || []).map((p) => Number(p.userId)));
+  let x = Math.abs(Math.trunc(Number(seed) || 1)) || 1;
+  return (players || []).map((p) => {
+    x = (x * 1664525 + 1013904223) % 0x100000000;
+    const point = (x % 100) + 1;
+    return {
+      userId: p.userId,
+      player: p.displayName || '',
+      point,
+      result: teamAIds.has(Number(p.userId)) ? 'Roll 后分入 A 组' : 'Roll 后分入 B 组',
+    };
+  });
+}
+
 function buildSettlement(players, seed = Date.now()) {
   const normalized = (Array.isArray(players) ? players : []).map((p) => ({
     userId: Number(p.userId),
@@ -177,11 +192,15 @@ function buildSettlement(players, seed = Date.now()) {
 
   const [teamA, teamB] = grouped.teams;
   const beanResult = calcBeans(teamA, teamB);
+  const rollPoints = grouped.needsRandom
+    ? buildRollPoints(normalized, teamA, teamB, seed)
+    : [];
 
   return {
     ok: true,
     strategy: grouped.strategy,
     needsRandom: grouped.needsRandom,
+    rollPoints,
     teamA: teamA.map((p) => ({ ...p })),
     teamB: teamB.map((p) => ({ ...p })),
     beanResult,
@@ -197,5 +216,6 @@ module.exports = {
   calcTail,
   groupPlayersByPriority,
   calcBeans,
+  buildRollPoints,
   buildSettlement,
 };

@@ -111,6 +111,7 @@ async function settleSingleMatch(session, players, matchId, { operatorUserId = n
   const summary = {
     strategy: settlement.strategy,
     needsRandom: settlement.needsRandom,
+    rollPoints: settlement.rollPoints || [],
     winner: settlement.beanResult.winner,
     killsA: settlement.beanResult.killsA,
     killsB: settlement.beanResult.killsB,
