@@ -154,7 +154,7 @@ const handleSeatClick = async (table, seatNo) => {
   }
   const player = seatPlayer(realTable, seatNo)
   if (player) {
-    if (Number(player.userId) === myUserId.value && realTable.status === 'waiting' && Number(realTable.ownerUserId) !== myUserId.value) {
+    if (Number(player.userId) === myUserId.value && realTable.status === 'waiting') {
       await leave(realTable)
       return
     }

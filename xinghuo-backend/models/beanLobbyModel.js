@@ -215,14 +215,41 @@ class BeanLobbyModel {
         await conn.rollback();
         return { ok: false, code: 'NOT_IN_TABLE' };
       }
-      if (player.player_role === 'owner') {
-        await conn.rollback();
-        return { ok: false, code: 'OWNER_CANNOT_LEAVE' };
-      }
+      const isOwner = player.player_role === 'owner';
       await conn.execute(
         `UPDATE bean_table_players SET is_active = 0, left_at = NOW() WHERE id = ?`,
         [player.id]
       );
+      if (isOwner) {
+        const [others] = await conn.execute(
+          `SELECT user_id FROM bean_table_players
+           WHERE table_id = ? AND is_active = 1
+           ORDER BY seat_no ASC, joined_at ASC
+           LIMIT 1 FOR UPDATE`,
+          [tableId]
+        );
+        if (others.length) {
+          const newOwnerUserId = others[0].user_id;
+          await conn.execute(
+            `UPDATE bean_tables SET owner_user_id = ? WHERE id = ?`,
+            [newOwnerUserId, tableId]
+          );
+          await conn.execute(
+            `UPDATE bean_table_players
+             SET player_role = CASE
+               WHEN user_id = ? THEN 'owner'
+               ELSE 'player'
+             END
+             WHERE table_id = ? AND is_active = 1`,
+            [newOwnerUserId, tableId]
+          );
+        } else {
+          await conn.execute(
+            `UPDATE bean_tables SET owner_user_id = NULL WHERE id = ?`,
+            [tableId]
+          );
+        }
+      }
       await conn.commit();
       return { ok: true };
     } catch (error) {

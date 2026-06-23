@@ -74,14 +74,12 @@ const buttonStates = computed(() => ({
           : '',
   },
   leave: {
-    disabled: !mySeat.value || isOwner.value || table.value?.status !== 'waiting',
+    disabled: !mySeat.value || table.value?.status !== 'waiting',
     reason: !mySeat.value
       ? '你未入座'
-      : isOwner.value
-        ? '桌主请移交后再离桌'
-        : table.value?.status !== 'waiting'
-          ? '对局进行中不可离桌'
-          : '',
+      : table.value?.status !== 'waiting'
+        ? '对局进行中不可离桌'
+        : '',
   },
   start: {
     disabled: !canStart.value,
