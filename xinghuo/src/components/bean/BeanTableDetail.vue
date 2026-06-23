@@ -264,10 +264,11 @@ const syncMatches = async ({ silent = false } = {}) => {
         ElMessage.info(data.message || '暂无新的四排共同对局')
       }
     }
+    await loadSession()
     await loadTable()
   } catch (error) {
     if (!silent) {
-      ElMessage.warning(error.message || '同步暂不可用，请稍后重试')
+      ElMessage.error(error.message || '同步失败，请稍后重试')
     }
   } finally {
     syncing.value = false

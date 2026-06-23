@@ -5,6 +5,31 @@
 const path = require('path')
 
 const backendDir = path.join(__dirname, '..', 'xinghuo-backend')
+const dotenv = require(path.join(backendDir, 'node_modules', 'dotenv'))
+
+dotenv.config({ path: path.join(backendDir, '.env') })
+
+const rawEnv = {
+  NODE_ENV: 'production',
+  PORT: process.env.PORT,
+  JWT_SECRET: process.env.JWT_SECRET,
+  JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN,
+  DB_HOST: process.env.DB_HOST,
+  DB_USER: process.env.DB_USER,
+  DB_PASSWORD: process.env.DB_PASSWORD,
+  DB_NAME: process.env.DB_NAME,
+  CORS_ORIGIN: process.env.CORS_ORIGIN,
+  TRUST_PROXY_HOPS: process.env.TRUST_PROXY_HOPS,
+  INIT_DEFAULT_INVITE_CODE: process.env.INIT_DEFAULT_INVITE_CODE,
+  PUBG_API_KEY: process.env.PUBG_API_KEY,
+  BEAN_POLL_ENABLED: process.env.BEAN_POLL_ENABLED,
+  BEAN_POLL_INTERVAL_MS: process.env.BEAN_POLL_INTERVAL_MS,
+  BEAN_MATCH_LOOKBACK_MS: process.env.BEAN_MATCH_LOOKBACK_MS,
+}
+
+const productionEnv = Object.fromEntries(
+  Object.entries(rawEnv).filter(([, value]) => value != null && String(value).trim() !== '')
+)
 
 module.exports = {
   apps: [
@@ -17,9 +42,7 @@ module.exports = {
       autorestart: true,
       max_restarts: 20,
       min_uptime: '5s',
-      env: {
-        NODE_ENV: 'production',
-      },
+      env: productionEnv,
     },
   ],
 }

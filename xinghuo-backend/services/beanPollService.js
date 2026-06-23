@@ -1,11 +1,13 @@
 const BeanLobbyModel = require('../models/beanLobbyModel');
 const {
-  fetchRecentSquadMatchesForPlayer,
-  pickNewCommonMatchIds,
+  findSettleableMatches,
+  mapPubgPollError,
   settleSingleMatch,
 } = require('./beanSettlementService');
 
 const ACTIVE_SESSION_STATUSES = new Set(['started', 'matching', 'preview', 'matched', 'failed']);
+
+const NO_MATCH_MESSAGE = '暂无新的四排共同对局（请确认 4 人已同场完成一局四排，且 PUBG 平台一致）';
 
 async function pollSession(sessionId, { operatorUserId = null } = {}) {
   const session = await BeanLobbyModel.getSessionById(sessionId);
@@ -30,25 +32,30 @@ async function pollSession(sessionId, { operatorUserId = null } = {}) {
   }
 
   const processed = await BeanLobbyModel.listProcessedMatchIds(sessionId);
-  const recentByUser = new Map();
-  for (const p of players) {
-    const list = await fetchRecentSquadMatchesForPlayer(p, 20);
-    recentByUser.set(p.userId, list);
+  let candidates;
+  try {
+    candidates = await findSettleableMatches(session, players, processed);
+  } catch (error) {
+    console.error('[bean-poll] find matches failed:', error?.message || error);
+    return mapPubgPollError(error);
   }
-  const candidates = pickNewCommonMatchIds(recentByUser, {
-    afterTime: session.started_at,
-    excludeMatchIds: processed,
-  });
 
   if (!candidates.length) {
     await BeanLobbyModel.touchSessionPoll(sessionId);
-    return { ok: true, sessionId, newRounds: 0, message: '暂无新的四排共同对局' };
+    return { ok: true, sessionId, newRounds: 0, message: NO_MATCH_MESSAGE };
   }
 
   const settledRounds = [];
   for (const candidate of candidates) {
     const latestSession = await BeanLobbyModel.getSessionById(sessionId);
-    const result = await settleSingleMatch(latestSession, players, candidate.matchId, { operatorUserId });
+    let result;
+    try {
+      result = await settleSingleMatch(latestSession, players, candidate.matchId, { operatorUserId });
+    } catch (error) {
+      console.error(`[bean-poll] settle ${candidate.matchId} failed:`, error?.message || error);
+      if (settledRounds.length) break;
+      return mapPubgPollError(error);
+    }
     if (!result.ok) {
       if (settledRounds.length) break;
       return result;
@@ -61,7 +68,7 @@ async function pollSession(sessionId, { operatorUserId = null } = {}) {
     sessionId,
     newRounds: settledRounds.length,
     rounds: settledRounds,
-    message: settledRounds.length ? `已同步 ${settledRounds.length} 局新对局` : '暂无新的四排共同对局',
+    message: settledRounds.length ? `已同步 ${settledRounds.length} 局新对局` : NO_MATCH_MESSAGE,
   };
 }
 

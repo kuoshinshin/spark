@@ -30,6 +30,10 @@ function mapBeanError(code) {
     MATCH_ALREADY_SETTLED: { status: 400, message: '该对局已结算' },
     MATCH_DATA_INCOMPLETE: { status: 400, message: '匹配到对局但数据不完整，请手动修正' },
     INVALID_STATUS: { status: 400, message: '当前状态不允许该操作' },
+    PUBG_API_KEY_MISSING: { status: 500, message: '服务器未配置 PUBG API Key，请联系管理员' },
+    PUBG_API_KEY_INVALID: { status: 502, message: 'PUBG API Key 无效或已过期，请联系管理员' },
+    PUBG_RATE_LIMIT: { status: 429, message: 'PUBG API 请求过于频繁，请稍后重试' },
+    PUBG_API_ERROR: { status: 502, message: 'PUBG 服务暂时不可用，请稍后重试' },
   };
   return map[code] || { status: 400, message: '操作失败' };
 }
