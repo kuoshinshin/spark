@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
 import { beanApi } from '../../services/api'
+import { avatarDisplayUrl } from '../../utils/avatar'
 import { useAuthStore } from '../../stores/auth'
 
 const auth = useAuthStore()
@@ -229,7 +230,7 @@ onMounted(async () => {
                   <template v-if="seatPlayer(table, seatNo)">
                     <el-avatar
                       :size="40"
-                      :src="seatPlayer(table, seatNo)?.avatar || ''"
+                      :src="avatarDisplayUrl(seatPlayer(table, seatNo)?.avatar)"
                     >
                       {{ (displayName(seatPlayer(table, seatNo)).slice(0, 1) || '玩') }}
                     </el-avatar>

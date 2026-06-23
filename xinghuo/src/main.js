@@ -26,6 +26,7 @@ import router from './router'
 import { useAuthStore } from './stores/auth'
 import { useUiStore } from './stores/ui'
 import { setUnauthorizedHandler } from './services/sessionBridge'
+import { DEFAULT_AVATAR } from './utils/avatar'
 
 const app = createApp(App)
 const pinia = createPinia()
@@ -98,8 +99,8 @@ registerPwaFeatures()
 
 if (import.meta.env.PROD) {
   window.addEventListener('error', (e) => {
-    if (e.target.tagName === 'IMG') {
-      console.warn('图片加载失败:', e.target.src)
+    if (e.target?.tagName === 'IMG' && e.target.src && !String(e.target.src).includes('default-avatar')) {
+      e.target.src = DEFAULT_AVATAR
     }
   }, true)
 }

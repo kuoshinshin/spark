@@ -1,8 +1,15 @@
 const BeanLobbyModel = require('../models/beanLobbyModel');
-const { getRecentMatches, getMatchById, parsePlayerStatsFromMatch } = require('./pubgApi');
+const {
+  getMatchById,
+  getPlayerWithRelationships,
+  parsePlayerStatsFromMatch,
+  matchGameMode,
+} = require('./pubgApi');
 const { buildSettlement } = require('./beanRuleEngine');
 
 const DEFAULT_MATCH_LOOKBACK_MS = 3 * 60 * 60 * 1000;
+const BEAN_MAX_MATCH_REFS = Number(process.env.BEAN_MAX_MATCH_REFS || 8);
+const BEAN_MAX_VERIFY_CANDIDATES = Number(process.env.BEAN_MAX_VERIFY_CANDIDATES || 6);
 
 function normalizeDate(value) {
   if (!value) return '';
@@ -72,45 +79,79 @@ function allPlayersPresentInMatch(matchData, players) {
 }
 
 async function fetchRecentSquadMatchesForPlayer(player, pageSize = 20) {
-  const raw = await getRecentMatches(player.pubgPlatform, player.pubgPlayerId, 1, pageSize, 'squad');
-  return (raw.list || []).filter((item) => !item.isCustomMatch);
+  void pageSize;
+  const platform = player.pubgPlatform;
+  const profile = await getPlayerWithRelationships(platform, player.pubgPlayerId);
+  const refs = (profile?.relationships?.matches?.data || []).slice(0, BEAN_MAX_MATCH_REFS);
+  const list = [];
+  for (const ref of refs) {
+    try {
+      const matchData = await getMatchById(platform, ref.id);
+      const parsed = parsePlayerStatsFromMatch(matchData, player.pubgPlayerId);
+      if (parsed && !parsed.isCustomMatch && matchGameMode(parsed.gameMode, 'squad')) {
+        list.push(parsed);
+      }
+    } catch (error) {
+      console.warn(`[bean-settle] skip recent match ${ref.id}:`, error?.message || error);
+    }
+  }
+  return list;
 }
 
 async function findSettleableMatches(session, players, excludeMatchIds = new Set()) {
+  const platform = players[0].pubgPlatform;
+  const matchDataCache = new Map();
   const candidateMap = new Map();
+
+  const loadMatchData = async (matchId) => {
+    const key = String(matchId);
+    if (!matchDataCache.has(key)) {
+      matchDataCache.set(key, await getMatchById(platform, key));
+    }
+    return matchDataCache.get(key);
+  };
+
   for (const player of players) {
-    const list = await fetchRecentSquadMatchesForPlayer(player, 20);
-    for (const item of list) {
-      if (!item?.matchId || item.isCustomMatch) continue;
-      const matchId = String(item.matchId);
+    const profile = await getPlayerWithRelationships(platform, player.pubgPlayerId);
+    const refs = (profile?.relationships?.matches?.data || []).slice(0, BEAN_MAX_MATCH_REFS);
+    for (const ref of refs) {
+      const matchId = String(ref.id);
       if (excludeMatchIds.has(matchId)) continue;
-      if (!isWithinMatchWindow(item.createdAt, session.started_at)) continue;
-      const createdAt = normalizeDate(item.createdAt);
-      const existing = candidateMap.get(matchId);
-      if (!existing || createdAt > existing.createdAt) {
-        candidateMap.set(matchId, {
-          matchId,
-          createdAt,
-          gameMode: item.gameMode || '',
-          matchType: item.matchType || '',
-          mapName: item.mapName || '',
-        });
+      try {
+        const matchData = await loadMatchData(matchId);
+        const parsed = parsePlayerStatsFromMatch(matchData, player.pubgPlayerId);
+        if (!parsed || parsed.isCustomMatch || !matchGameMode(parsed.gameMode, 'squad')) continue;
+        if (!isWithinMatchWindow(parsed.createdAt, session.started_at)) continue;
+        const createdAt = normalizeDate(parsed.createdAt);
+        const existing = candidateMap.get(matchId);
+        if (!existing || createdAt > existing.createdAt) {
+          candidateMap.set(matchId, {
+            matchId,
+            createdAt,
+            gameMode: parsed.gameMode || '',
+            matchType: parsed.matchType || '',
+            mapName: parsed.mapName || '',
+          });
+        }
+      } catch (error) {
+        console.warn(`[bean-settle] skip match ${matchId}:`, error?.message || error);
       }
     }
   }
 
-  const platform = players[0].pubgPlatform;
   const verified = [];
-  const sortedCandidates = [...candidateMap.values()].sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+  const sortedCandidates = [...candidateMap.values()]
+    .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1))
+    .slice(0, BEAN_MAX_VERIFY_CANDIDATES);
 
   for (const candidate of sortedCandidates) {
     try {
-      const matchData = await getMatchById(platform, candidate.matchId);
+      const matchData = await loadMatchData(candidate.matchId);
       if (allPlayersPresentInMatch(matchData, players)) {
         verified.push(candidate);
       }
     } catch (error) {
-      console.warn(`[bean-settle] skip match ${candidate.matchId}:`, error?.message || error);
+      console.warn(`[bean-settle] verify match ${candidate.matchId} failed:`, error?.message || error);
     }
   }
 
@@ -123,6 +164,9 @@ function mapPubgPollError(error) {
   }
   if (error?.statusCode === 429) {
     return { ok: false, code: 'PUBG_RATE_LIMIT', message: 'PUBG API 请求过于频繁，请稍后重试' };
+  }
+  if (error?.code === 'PUBG_API_TIMEOUT' || error?.statusCode === 504) {
+    return { ok: false, code: 'PUBG_API_TIMEOUT', message: 'PUBG API 响应超时，请稍后重试' };
   }
   if (error?.statusCode === 401 || error?.statusCode === 403) {
     return { ok: false, code: 'PUBG_API_KEY_INVALID', message: 'PUBG API Key 无效或已过期，请联系管理员' };

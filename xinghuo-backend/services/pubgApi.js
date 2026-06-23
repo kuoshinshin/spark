@@ -15,10 +15,27 @@ function getHeaders() {
 }
 
 async function requestPubg(pathname) {
-  const response = await fetch(`${PUBG_API_BASE}${pathname}`, {
-    method: 'GET',
-    headers: getHeaders()
-  });
+  const controller = new AbortController();
+  const timeoutMs = Number(process.env.PUBG_REQUEST_TIMEOUT_MS || 20000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  try {
+    response = await fetch(`${PUBG_API_BASE}${pathname}`, {
+      method: 'GET',
+      headers: getHeaders(),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      const timeoutError = new Error('PUBG API 请求超时');
+      timeoutError.code = 'PUBG_API_TIMEOUT';
+      timeoutError.statusCode = 504;
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 
   const contentType = response.headers.get('content-type') || '';
   const mayBeJson = contentType.includes('json');
@@ -448,6 +465,8 @@ module.exports = {
   getMatchById,
   getSeasons,
   getPlayerSeason,
+  getPlayerWithRelationships,
   parsePlayerStatsFromMatch,
-  parseMatchDetailWithTeam
+  parseMatchDetailWithTeam,
+  matchGameMode,
 };

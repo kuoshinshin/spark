@@ -128,7 +128,18 @@ async function request(endpoint, options = {}) {
     let data = null;
 
     if (response.status !== 204) {
-      data = isJsonResponse ? await response.json() : await response.text();
+      const rawText = await response.text();
+      if (rawText.trim()) {
+        if (isJsonResponse) {
+          try {
+            data = JSON.parse(rawText);
+          } catch {
+            data = rawText;
+          }
+        } else {
+          data = rawText;
+        }
+      }
     }
     
     if (!response.ok) {
@@ -139,8 +150,8 @@ async function request(endpoint, options = {}) {
       }
       const errorMessage = typeof data === 'object' && data !== null
         ? data.error
-        : data;
-      throw new Error(errorMessage || '请求失败');
+        : (typeof data === 'string' && data.trim() ? data : '');
+      throw new Error(errorMessage || `请求失败 (${response.status})`);
     }
     
     // 缓存GET请求的响应
