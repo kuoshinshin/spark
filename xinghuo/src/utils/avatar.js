@@ -23,3 +23,10 @@ export function avatarDisplayUrl(avatar) {
   }
   return a
 }
+
+export function handleAvatarImgError(event) {
+  const img = event?.target
+  if (!img || img.dataset?.avatarFallback === '1') return
+  img.dataset.avatarFallback = '1'
+  img.src = DEFAULT_AVATAR
+}

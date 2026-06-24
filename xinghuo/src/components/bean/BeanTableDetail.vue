@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { beanApi } from '../../services/api'
-import { avatarDisplayUrl } from '../../utils/avatar'
+import { avatarDisplayUrl, handleAvatarImgError } from '../../utils/avatar'
 import { useAuthStore } from '../../stores/auth'
 import { isMockDataEnabled } from '../../config/runtimeMode'
 import { loadBeanTimelineFixture } from '../../mock'
@@ -632,7 +632,7 @@ onUnmounted(() => {
             <div v-else class="scoreboard-grid">
               <div v-for="row in scoreRows" :key="row.userId || row.seatNo" class="score-card">
                 <div class="score-top">
-                  <el-avatar :size="44" :src="avatarDisplayUrl(row.avatar)">{{ row.displayName.slice(0, 1) }}</el-avatar>
+                  <el-avatar :size="44" :src="avatarDisplayUrl(row.avatar)" @error="handleAvatarImgError">{{ row.displayName.slice(0, 1) }}</el-avatar>
                   <div class="score-meta">
                     <strong>{{ row.displayName }}</strong>
                     <span>座位 {{ row.seatNo }} · {{ row.pubgPlayerName }}</span>

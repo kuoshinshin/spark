@@ -13,6 +13,21 @@ function toMysqlDatetime(value) {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
+async function purgeInactiveSeatHistory(conn, tableId, { userId = null, seatNo = null } = {}) {
+  if (userId != null) {
+    await conn.execute(
+      `DELETE FROM bean_table_players WHERE table_id = ? AND user_id = ? AND is_active = 0`,
+      [tableId, userId]
+    );
+  }
+  if (seatNo != null) {
+    await conn.execute(
+      `DELETE FROM bean_table_players WHERE table_id = ? AND seat_no = ? AND is_active = 0`,
+      [tableId, seatNo]
+    );
+  }
+}
+
 class BeanLobbyModel {
   static getFixedTableNames() {
     return Array.from({ length: FIXED_TABLE_COUNT }, (_, idx) => `${FIXED_TABLE_PREFIX}${String(idx + 1).padStart(2, '0')}`);
@@ -172,6 +187,7 @@ class BeanLobbyModel {
         while (actives.some((p) => Number(p.seat_no) === seatNo)) seatNo += 1;
       }
       const role = actives.length === 0 ? 'owner' : 'player';
+      await purgeInactiveSeatHistory(conn, tableId, { userId, seatNo });
       await conn.execute(
         `INSERT INTO bean_table_players
          (table_id, user_id, seat_no, player_role, is_active, joined_at)
@@ -223,6 +239,10 @@ class BeanLobbyModel {
         return { ok: false, code: 'NOT_IN_TABLE' };
       }
       const isOwner = player.player_role === 'owner';
+      await purgeInactiveSeatHistory(conn, tableId, {
+        userId,
+        seatNo: player.seat_no,
+      });
       await conn.execute(
         `UPDATE bean_table_players SET is_active = 0, left_at = NOW() WHERE id = ?`,
         [player.id]
@@ -232,7 +252,7 @@ class BeanLobbyModel {
           `SELECT user_id FROM bean_table_players
            WHERE table_id = ? AND is_active = 1
            ORDER BY seat_no ASC, joined_at ASC
-           LIMIT 1 FOR UPDATE`,
+           LIMIT 1`,
           [tableId]
         );
         if (others.length) {
