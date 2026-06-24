@@ -837,7 +837,7 @@ class BeanLobbyModel {
           sessionId,
           roundNo,
           matchId,
-          matchCreatedAt || null,
+          toMysqlDatetime(matchCreatedAt),
           gameMode || null,
           matchType || null,
           mapName || null,
