@@ -6,6 +6,13 @@ function toJsonSafe(value) {
   return JSON.stringify(value == null ? {} : value);
 }
 
+function toMysqlDatetime(value) {
+  if (value == null || value === '') return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  return date.toISOString().slice(0, 19).replace('T', ' ');
+}
+
 class BeanLobbyModel {
   static getFixedTableNames() {
     return Array.from({ length: FIXED_TABLE_COUNT }, (_, idx) => `${FIXED_TABLE_PREFIX}${String(idx + 1).padStart(2, '0')}`);
