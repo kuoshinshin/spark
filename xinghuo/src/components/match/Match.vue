@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { eventApi } from '../../services/api'
 import { useAuthStore } from '../../stores/auth'
-import { avatarDisplayUrl } from '../../utils/avatar'
+import { avatarDisplayUrl, handleAvatarImgError } from '../../utils/avatar'
 import { sparkLevelFromScore } from '../../utils/sparkLevel'
 import MatchHistoryPanel from './MatchHistoryPanel.vue'
 

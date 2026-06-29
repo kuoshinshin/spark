@@ -2,7 +2,7 @@
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { userApi } from '../../services/api'
-import { DEFAULT_AVATAR, normalizeAvatar, avatarDisplayUrl } from '../../utils/avatar'
+import { DEFAULT_AVATAR, normalizeAvatar, avatarDisplayUrl, handleAvatarImgError } from '../../utils/avatar'
 import { useAuthStore } from '../../stores/auth'
 
 // 用户数据
@@ -970,7 +970,7 @@ onBeforeUnmount(() => {
                 >
                   <template #trigger>
                     <div class="avatar">
-                      <el-avatar class="profile-avatar-img" :src="avatarDisplayUrl(userData.avatar)"></el-avatar>
+                      <el-avatar class="profile-avatar-img" :src="avatarDisplayUrl(userData.avatar)" @error="handleAvatarImgError"></el-avatar>
                       <div class="avatar-edit">
                         <span>{{ avatarUploading ? '上传中…' : '裁剪头像' }}</span>
                       </div>

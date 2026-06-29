@@ -56,8 +56,31 @@ app.use(compression({
 }));
 
 const uploadsRoot = path.join(__dirname, 'uploads');
+const defaultAvatarFile = path.join(uploadsRoot, 'default-avatar.svg');
 fs.mkdirSync(path.join(uploadsRoot, 'avatars'), { recursive: true });
 fs.mkdirSync(path.join(uploadsRoot, 'posts'), { recursive: true });
+
+function sendDefaultAvatar(res) {
+  res.type('image/svg+xml');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  return res.sendFile(defaultAvatarFile);
+}
+
+function serveAvatarUpload(req, res) {
+  const filename = path.basename(String(req.path || ''));
+  if (!filename || filename.includes('..') || !/\.(jpe?g|png|gif|webp|svg)$/i.test(filename)) {
+    return sendDefaultAvatar(res);
+  }
+  const filePath = path.join(uploadsRoot, 'avatars', filename);
+  if (fs.existsSync(filePath)) {
+    return res.sendFile(filePath);
+  }
+  return sendDefaultAvatar(res);
+}
+
+app.get('/uploads/avatars/:filename', serveAvatarUpload);
+app.head('/uploads/avatars/:filename', serveAvatarUpload);
+
 app.use(
   '/uploads',
   express.static(uploadsRoot, {

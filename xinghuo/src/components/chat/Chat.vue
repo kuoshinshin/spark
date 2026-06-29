@@ -3,7 +3,7 @@ import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { chatApi, userApi, notificationApi } from '../../services/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { DEFAULT_AVATAR, normalizeAvatar, avatarDisplayUrl } from '../../utils/avatar'
+import { DEFAULT_AVATAR, normalizeAvatar, avatarDisplayUrl, handleAvatarImgError } from '../../utils/avatar'
 import { calcMomentsImageSize, getMomentsImageLimits, getMomentsImageStyle } from '../../utils/momentsImage'
 
 const route = useRoute()
@@ -1008,7 +1008,7 @@ watch(
         <!-- 左侧边栏 -->
         <div class="sidebar">
           <div class="user-card">
-            <el-avatar :src="avatarDisplayUrl(currentUser.avatar)" :size="80" class="user-avatar" />
+            <el-avatar :src="avatarDisplayUrl(currentUser.avatar)" :size="80" class="user-avatar" @error="handleAvatarImgError" />
             <h3>{{ currentUser.name }}</h3>
             <el-button type="primary" class="post-button" @click="openPostModal">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -1078,6 +1078,7 @@ watch(
                   <div class="post-user">
                     <el-avatar
                       :src="avatarDisplayUrl(post.avatar || post.user?.avatar)"
+                      @error="handleAvatarImgError"
                       :size="48"
                       class="user-avatar post-user-avatar-click"
                       @click="viewUserProfile(post.userId || post.user?.id)"
@@ -1183,6 +1184,7 @@ watch(
                           <div class="comment-avatar-container">
                             <el-avatar
                               :src="avatarDisplayUrl(comment.user?.avatar)"
+                              @error="handleAvatarImgError"
                               :size="32"
                               class="comment-avatar"
                             />
@@ -1209,6 +1211,7 @@ watch(
                           <div class="comment-avatar-container">
                             <el-avatar
                               :src="avatarDisplayUrl(comment.user?.avatar)"
+                              @error="handleAvatarImgError"
                               :size="32"
                               class="comment-avatar"
                             />
@@ -1241,7 +1244,7 @@ watch(
                   
                   <!-- 评论输入 -->
                   <div class="comment-input">
-                    <el-avatar :src="avatarDisplayUrl(currentUser.avatar)" :size="32" class="comment-input-avatar" />
+                    <el-avatar :src="avatarDisplayUrl(currentUser.avatar)" :size="32" class="comment-input-avatar" @error="handleAvatarImgError" />
                     <el-input
                       v-model="commentInputs[post.id]"
                       placeholder="说点什么..."
@@ -1295,7 +1298,7 @@ watch(
     >
       <div class="post-form">
         <div class="post-user-info">
-          <el-avatar :src="avatarDisplayUrl(currentUser.avatar)" :size="40" class="user-avatar" />
+          <el-avatar :src="avatarDisplayUrl(currentUser.avatar)" :size="40" class="user-avatar" @error="handleAvatarImgError" />
           <span class="user-name">{{ currentUser.name }}</span>
         </div>
         <el-input
@@ -1404,7 +1407,7 @@ watch(
     >
       <div class="post-form">
         <div class="post-user-info">
-          <el-avatar :src="avatarDisplayUrl(currentUser.avatar)" :size="40" class="user-avatar" />
+          <el-avatar :src="avatarDisplayUrl(currentUser.avatar)" :size="40" class="user-avatar" @error="handleAvatarImgError" />
           <span class="user-name">{{ currentUser.name }}</span>
         </div>
         <el-input
