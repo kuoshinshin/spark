@@ -2,7 +2,7 @@
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { userApi } from '../../services/api'
-import { DEFAULT_AVATAR, normalizeAvatar, avatarDisplayUrl, handleAvatarImgError } from '../../utils/avatar'
+import { DEFAULT_AVATAR, normalizeAvatar, avatarDisplayUrl, handleAvatarImgError, clearFailedAvatar } from '../../utils/avatar'
 import { useAuthStore } from '../../stores/auth'
 
 // 用户数据
@@ -99,6 +99,12 @@ const pubgPowerLevelText = computed(() => {
     empty: '暂无评级'
   }
   return map[pubgPowerLevelKey.value] || map.empty
+})
+const pubgPowerSeasonLabel = computed(() => {
+  const id = String(pubgPower.value?.seasonId || '')
+  if (!id) return ''
+  const tail = id.split('.').pop()
+  return tail || id
 })
 const pubgVisual = computed(() => {
   const stats = currentOverviewStats.value
@@ -846,6 +852,7 @@ const uploadAvatarFile = async (file) => {
     const response = await userApi.uploadAvatar(file)
     if (response.user) {
       const next = normalizeAvatar(response.user.avatar)
+      clearFailedAvatar(next)
       userData.value = {
         ...userData.value,
         ...response.user,
@@ -970,7 +977,7 @@ onBeforeUnmount(() => {
                 >
                   <template #trigger>
                     <div class="avatar">
-                      <el-avatar class="profile-avatar-img" :src="avatarDisplayUrl(userData.avatar)" @error="handleAvatarImgError"></el-avatar>
+                      <el-avatar :key="userData.avatar" class="profile-avatar-img" :src="avatarDisplayUrl(userData.avatar)" @error="handleAvatarImgError"></el-avatar>
                       <div class="avatar-edit">
                         <span>{{ avatarUploading ? '上传中…' : '裁剪头像' }}</span>
                       </div>
@@ -1216,7 +1223,10 @@ onBeforeUnmount(() => {
               <div class="card-title-row">
                 <div class="card-heading-stack">
                   <h3 class="pubg-card-title">星火战力值</h3>
-                  <p class="power-subtitle">最近 {{ pubgPower?.requestedMatches || 200 }} 场竞技模式综合评分</p>
+                  <p class="power-subtitle">
+                    当前赛季排位综合评分
+                    <span v-if="pubgPowerSeasonLabel">（{{ pubgPowerSeasonLabel }}）</span>
+                  </p>
                 </div>
                 <span class="status-pill">Ranked</span>
               </div>
@@ -1240,7 +1250,7 @@ onBeforeUnmount(() => {
                 <div class="power-metric-item"><span class="power-metric-label">KD</span><span class="power-metric-value">{{ pubgPower.kd }}</span></div>
                 <div class="power-metric-item"><span class="power-metric-label">场均伤害</span><span class="power-metric-value">{{ pubgPower.avgDamage }}</span></div>
                 <div class="power-metric-item"><span class="power-metric-label">平均排名</span><span class="power-metric-value">{{ pubgPower.avgRank }}</span></div>
-                <div class="power-metric-item"><span class="power-metric-label">样本场次</span><span class="power-metric-value">{{ pubgPower.matchesAnalyzed }}</span></div>
+                <div class="power-metric-item"><span class="power-metric-label">排位场次</span><span class="power-metric-value">{{ pubgPower.matchesAnalyzed }}</span></div>
               </div>
               <button
                 v-if="pubgPower"
@@ -1262,19 +1272,18 @@ onBeforeUnmount(() => {
                 <section class="power-formula-section">
                   <span class="section-kicker">FORMULA</span>
                   <h4>计算方式</h4>
-                  <p class="power-formula-equation">战力值 = round((KD因子 × 0.45 + 伤害因子 × 0.30 + 排名因子 × 0.25) × 1000)</p>
+                  <p class="power-formula-equation">战力值 = round((KD因子 × 0.85 + 伤害因子 × 0.15) × 1000)</p>
+                  <p class="power-formula-hint">数据来源：PUBG 官方当前赛季排位统计（/seasons/{seasonId}/ranked），合并 solo / duo / squad 及各 FPP 模式。</p>
                   <div class="power-factor-grid">
                     <div class="power-factor-item">
-                      <span>KD 因子</span>
-                      <strong>min(KD, 5) / 5</strong>
+                      <span>KD 因子（85%）</span>
+                      <strong>min(赛季排位 KD, 5) / 5</strong>
+                      <span class="power-factor-note">KD = 击杀 / 死亡（官方 ranked 聚合）</span>
                     </div>
                     <div class="power-factor-item">
-                      <span>伤害因子</span>
+                      <span>伤害因子（15%）</span>
                       <strong>min(场均伤害, 600) / 600</strong>
-                    </div>
-                    <div class="power-factor-item">
-                      <span>排名因子</span>
-                      <strong>clamp((101 - 平均排名) / 100, 0, 1)</strong>
+                      <span class="power-factor-note">场均伤害 = 赛季累计伤害 / 排位场次</span>
                     </div>
                   </div>
                 </section>
@@ -4835,7 +4844,7 @@ onBeforeUnmount(() => {
 
 .power-factor-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.7rem;
   margin-top: 0.8rem;
 }
@@ -4860,6 +4869,15 @@ onBeforeUnmount(() => {
   color: #3f382f;
   font-size: 0.78rem;
   line-height: 1.45;
+}
+
+.power-factor-note {
+  display: block;
+  margin-top: 0.35rem;
+  color: #b0a494;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1.4;
 }
 
 .power-rank-preview-grid {

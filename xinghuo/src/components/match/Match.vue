@@ -550,6 +550,7 @@ watch(activeTab, (tab) => {
                         :src="avatarDisplayUrl(slot.avatar)"
                         :size="22"
                         class="slot-avatar"
+                        @error="handleAvatarImgError"
                       />
                       <span class="slot-line">
                         <span class="member-name">{{ slotMemberName(slot) }}</span>

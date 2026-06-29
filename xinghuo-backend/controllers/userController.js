@@ -86,7 +86,7 @@ class UserController {
           userId,
           cacheKey: UserController.buildPubgCacheKey(binding, 'power'),
           ttlMs: PUBG_CACHE_TTL_POWER_MS,
-          fetcher: () => getCompetitivePowerScore(binding.platform, binding.playerId, 200),
+          fetcher: () => getCompetitivePowerScore(binding.platform, binding.playerId),
         }),
         getOrRefresh({
           userId,
@@ -715,7 +715,7 @@ class UserController {
 
       const power = forceRefresh
         ? await (async () => {
-            const fresh = await getCompetitivePowerScore(binding.platform, binding.playerId, 200);
+            const fresh = await getCompetitivePowerScore(binding.platform, binding.playerId);
             await UserModel.savePubgPowerCache(userId, fresh);
             await getOrRefresh({
               userId,
@@ -731,7 +731,7 @@ class UserController {
             cacheKey: UserController.buildPubgCacheKey(binding, 'power'),
             ttlMs: PUBG_CACHE_TTL_POWER_MS,
             fetcher: async () => {
-              const fresh = await getCompetitivePowerScore(binding.platform, binding.playerId, 200);
+              const fresh = await getCompetitivePowerScore(binding.platform, binding.playerId);
               await UserModel.savePubgPowerCache(userId, fresh);
               return fresh;
             },

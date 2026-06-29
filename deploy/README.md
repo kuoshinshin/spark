@@ -133,6 +133,8 @@ include /opt/spark/deploy/nginx-hk-tuning.conf;
 
 若已有 `location /api/`、`location /uploads/`，请**删除重复块**，只保留 tuning 文件里的一份，或把 tuning 文件中的 location 合并进现有配置。
 
+**头像 404 排查**：`nginx-hk-tuning.conf` 中 `/uploads/` 必须使用 `location ^~ /uploads/`。若写成普通 `location /uploads/`，会被同文件里 `~* \.(jpg|png|...)$` 抢走，nginx 会在前端 dist 里找 `/uploads/avatars/*.jpg` 而返回 404（上传接口 `/api/` 仍成功，但页面无法显示）。
+
 然后：
 
 ```bash

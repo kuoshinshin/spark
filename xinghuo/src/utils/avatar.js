@@ -10,25 +10,51 @@ export function normalizeAvatar(avatar) {
   return trimmed
 }
 
-/** 用于 <img> / el-avatar：相对路径在「前端与 API 不同源」时补全为可请求的绝对地址 */
-export function avatarDisplayUrl(avatar) {
-  const a = normalizeAvatar(avatar)
-  if (a.startsWith('http://') || a.startsWith('https://') || a.startsWith('data:')) {
-    if (failedAvatarUrls.has(a)) return DEFAULT_AVATAR
-    return a
+function resolveAvatarUrl(path) {
+  if (path.startsWith('/uploads/') && typeof window !== 'undefined') {
+    return `${window.location.origin}${path}`
   }
   const explicit = import.meta.env.VITE_API_BASE_URL
-  let resolved = a
-  if (explicit && /^https?:\/\//i.test(String(explicit).trim()) && a.startsWith('/')) {
+  if (explicit && /^https?:\/\//i.test(String(explicit).trim()) && path.startsWith('/')) {
     try {
       const base = String(explicit).replace(/\/$/, '')
-      resolved = new URL(a, base).href
+      return new URL(path, base).href
     } catch {
-      resolved = a
+      return path
     }
   }
+  return path
+}
+
+/** 用于 <img> / el-avatar：相对路径在「前端与 API 不同源」时补全为可请求的绝对地址 */
+export function avatarDisplayUrl(avatar, cacheBust) {
+  const a = normalizeAvatar(avatar)
+  if (a.startsWith('http://') || a.startsWith('https://') || a.startsWith('data:')) {
+    const withBust = cacheBust ? appendCacheBust(a, cacheBust) : a
+    if (failedAvatarUrls.has(withBust)) return DEFAULT_AVATAR
+    return withBust
+  }
+  let resolved = resolveAvatarUrl(a)
+  if (cacheBust) resolved = appendCacheBust(resolved, cacheBust)
   if (failedAvatarUrls.has(resolved)) return DEFAULT_AVATAR
   return resolved
+}
+
+function appendCacheBust(url, token) {
+  if (!token || url.startsWith('data:')) return url
+  const sep = url.includes('?') ? '&' : '?'
+  return `${url}${sep}v=${encodeURIComponent(String(token))}`
+}
+
+/** 上传新头像后清除该路径的失败标记，避免会话内一直显示默认图 */
+export function clearFailedAvatar(avatar) {
+  const a = normalizeAvatar(avatar)
+  if (!a || a === DEFAULT_AVATAR) return
+  failedAvatarUrls.delete(a)
+  failedAvatarUrls.delete(resolveAvatarUrl(a))
+  if (typeof window !== 'undefined') {
+    failedAvatarUrls.delete(`${window.location.origin}${a}`)
+  }
 }
 
 export function handleAvatarImgError(event) {

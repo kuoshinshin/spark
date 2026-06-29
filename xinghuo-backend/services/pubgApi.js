@@ -359,35 +359,6 @@ async function getMatchesBySeason(platform, playerId, seasonId, mode = '', page 
   };
 }
 
-function isCompetitiveMatch(matchData) {
-  const matchType = String(matchData?.data?.attributes?.matchType || '').toLowerCase();
-  return matchType === 'competitive' || matchType === 'ranked';
-}
-
-function parseCompetitivePerformance(matchData, playerId) {
-  if (!isCompetitiveMatch(matchData)) return null;
-  const included = Array.isArray(matchData?.included) ? matchData.included : [];
-  const participant = included.find((item) => {
-    if (item?.type !== 'participant') return false;
-    const statsPlayerId = item?.attributes?.stats?.playerId;
-    return String(statsPlayerId || '') === String(playerId);
-  });
-  if (!participant) return null;
-
-  const stats = participant.attributes?.stats || {};
-  const winPlace = Number(stats.winPlace || 0);
-  const kills = Number(stats.kills || 0);
-  const damageDealt = Number(stats.damageDealt || 0);
-  const deaths = winPlace === 1 ? 0 : 1;
-
-  return {
-    kills,
-    damageDealt,
-    winPlace,
-    deaths
-  };
-}
-
 function calculatePowerLevel(score) {
   if (score >= 920) return '魔王S';
   if (score >= 780) return 'S';
@@ -398,60 +369,92 @@ function calculatePowerLevel(score) {
   return 'E';
 }
 
-async function getCompetitivePowerScore(platform, playerId, limit = 200) {
-  const player = await getPlayerWithRelationships(platform, playerId);
-  const matchRefs = player?.relationships?.matches?.data || [];
-  const targetCount = Math.max(20, Math.min(200, Number(limit || 200)));
-  const scanLimit = Math.min(matchRefs.length, Math.max(targetCount * 3, targetCount));
-  const selectedRefs = matchRefs.slice(0, scanLimit);
+function buildEmptyPowerScore(seasonId = '') {
+  return {
+    score: 0,
+    level: '暂无评级',
+    kd: 0,
+    avgDamage: 0,
+    avgRank: 0,
+    matchesAnalyzed: 0,
+    seasonId,
+    factors: {
+      kdFactor: 0,
+      damageFactor: 0
+    }
+  };
+}
 
-  const perfList = await mapWithConcurrency(selectedRefs, async (ref) => {
-    const matchData = await getMatchById(platform, ref.id);
-    return parseCompetitivePerformance(matchData, playerId);
-  }, 4);
-  const performances = perfList.filter(Boolean).slice(0, targetCount);
+/** 合并当前赛季各排位模式（solo/duo/squad 及 FPP）的官方聚合统计 */
+function aggregateRankedSeasonStats(rankedGameModeStats = {}) {
+  const entries = Object.values(rankedGameModeStats).filter(Boolean);
+  if (!entries.length) return null;
 
-  if (!performances.length) {
-    return {
-      score: 0,
-      level: '暂无评级',
-      kd: 0,
-      avgDamage: 0,
-      avgRank: 0,
-      matchesAnalyzed: 0,
-      requestedMatches: targetCount,
-      factors: {
-        kdFactor: 0,
-        damageFactor: 0,
-        rankFactor: 0
-      }
-    };
+  let roundsPlayed = 0;
+  let kills = 0;
+  let deaths = 0;
+  let damageDealt = 0;
+  let rankWeightedSum = 0;
+
+  entries.forEach((stats) => {
+    const rounds = Number(stats?.roundsPlayed || 0);
+    if (rounds <= 0) return;
+    roundsPlayed += rounds;
+    kills += Number(stats?.kills || 0);
+    deaths += Number(stats?.deaths || 0);
+    damageDealt += Number(stats?.damageDealt || 0);
+    rankWeightedSum += Number(stats?.avgRank || 0) * rounds;
+  });
+
+  if (roundsPlayed <= 0) return null;
+
+  const kd = deaths > 0 ? kills / deaths : kills;
+  return {
+    roundsPlayed,
+    kd,
+    avgDamage: damageDealt / roundsPlayed,
+    avgRank: rankWeightedSum / roundsPlayed
+  };
+}
+
+async function getCompetitivePowerScore(platform, playerId) {
+  let seasons = [];
+  try {
+    seasons = await getSeasons(platform);
+  } catch (_) {
+    return buildEmptyPowerScore();
   }
 
-  const totalKills = performances.reduce((sum, item) => sum + item.kills, 0);
-  const totalDamage = performances.reduce((sum, item) => sum + item.damageDealt, 0);
-  const totalDeaths = performances.reduce((sum, item) => sum + item.deaths, 0);
-  const avgRank = performances.reduce((sum, item) => sum + item.winPlace, 0) / performances.length;
-  const avgDamage = totalDamage / performances.length;
-  const kd = totalDeaths > 0 ? totalKills / totalDeaths : totalKills;
+  const currentSeason = seasons.find((item) => item?.isCurrentSeason);
+  const seasonId = currentSeason?.id || '';
+  if (!seasonId) return buildEmptyPowerScore();
 
-  const kdFactor = Math.min(kd, 5) / 5;
-  const damageFactor = Math.min(avgDamage, 600) / 600;
-  const rankFactor = Math.min(Math.max((101 - avgRank) / 100, 0), 1);
-  const score = Math.round((kdFactor * 0.45 + damageFactor * 0.3 + rankFactor * 0.25) * 1000);
+  let rankedData = null;
+  try {
+    rankedData = await getPlayerRankedSeason(platform, playerId, seasonId);
+  } catch (error) {
+    if (Number(error?.statusCode || 0) === 404) return buildEmptyPowerScore(seasonId);
+    throw error;
+  }
+
+  const aggregated = aggregateRankedSeasonStats(rankedData?.attributes?.rankedGameModeStats || {});
+  if (!aggregated) return buildEmptyPowerScore(seasonId);
+
+  const kdFactor = Math.min(aggregated.kd, 5) / 5;
+  const damageFactor = Math.min(aggregated.avgDamage, 600) / 600;
+  const score = Math.round((kdFactor * 0.85 + damageFactor * 0.15) * 1000);
 
   return {
     score,
     level: calculatePowerLevel(score),
-    kd: Number(kd.toFixed(2)),
-    avgDamage: Number(avgDamage.toFixed(1)),
-    avgRank: Number(avgRank.toFixed(1)),
-    matchesAnalyzed: performances.length,
-    requestedMatches: targetCount,
+    kd: Number(aggregated.kd.toFixed(2)),
+    avgDamage: Number(aggregated.avgDamage.toFixed(1)),
+    avgRank: Number(aggregated.avgRank.toFixed(1)),
+    matchesAnalyzed: aggregated.roundsPlayed,
+    seasonId,
     factors: {
       kdFactor: Number(kdFactor.toFixed(4)),
-      damageFactor: Number(damageFactor.toFixed(4)),
-      rankFactor: Number(rankFactor.toFixed(4))
+      damageFactor: Number(damageFactor.toFixed(4))
     }
   };
 }
