@@ -135,7 +135,9 @@ include /opt/spark/deploy/nginx-hk-tuning.conf;
 
 **头像 404 排查**：`nginx-hk-tuning.conf` 中 `/uploads/` 必须使用 `location ^~ /uploads/`。若写成普通 `location /uploads/`，会被同文件里 `~* \.(jpg|png|...)$` 抢走，nginx 会在前端 dist 里找 `/uploads/avatars/*.jpg` 而返回 404（上传接口 `/api/` 仍成功，但页面无法显示）。
 
-然后：
+`deploy/aliyun-ecs.sh` 在每次部署结束时会自动执行 `nginx -t` 并重载 Nginx（若本机已安装且配置检测通过）。首次改 Nginx 配置后仍需确认 `spark.conf` 已 `include` tuning 文件。
+
+若需手动重载：
 
 ```bash
 sudo nginx -t && sudo systemctl reload nginx

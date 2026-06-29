@@ -12,6 +12,36 @@ WEB_ROOT="${WEB_ROOT:-$HOME/www/xinghuo}"
 
 log() { printf '[deploy] %s\n' "$*"; }
 
+reload_nginx_if_present() {
+  if ! command -v nginx >/dev/null 2>&1; then
+    log "未检测到 nginx，跳过 reload。"
+    return 0
+  fi
+
+  log "检测 Nginx 配置 …"
+  local config_ok=0
+  if nginx -t >/dev/null 2>&1; then
+    config_ok=1
+  elif sudo nginx -t >/dev/null 2>&1; then
+    config_ok=1
+  fi
+
+  if [[ "$config_ok" -ne 1 ]]; then
+    log "警告：nginx -t 失败，已跳过 reload。请 SSH 检查 /etc/nginx 配置。"
+    return 0
+  fi
+
+  log "重载 Nginx …"
+  if nginx -s reload >/dev/null 2>&1 \
+    || systemctl reload nginx >/dev/null 2>&1 \
+    || sudo systemctl reload nginx >/dev/null 2>&1 \
+    || sudo nginx -s reload >/dev/null 2>&1; then
+    log "Nginx reload 完成。"
+  else
+    log "警告：Nginx reload 失败，请手动执行 sudo systemctl reload nginx"
+  fi
+}
+
 if [[ ! -f "$BACKEND_DIR/app.js" ]]; then
   log "未找到 $BACKEND_DIR/app.js，请确认在仓库根目录且包含 xinghuo-backend。"
   exit 1
@@ -59,5 +89,7 @@ else
   pm2 start deploy/ecosystem.config.cjs --only xinghuo-api
 fi
 pm2 save
+
+reload_nginx_if_present
 
 log "完成。请确认 Nginx 的 root 指向 $WEB_ROOT，且 /api 反代到 127.0.0.1:3000（或你设置的 PORT）。"
