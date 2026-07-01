@@ -92,4 +92,12 @@ pm2 save
 
 reload_nginx_if_present
 
-log "完成。请确认 Nginx 的 root 指向 $WEB_ROOT，且 /api 反代到 127.0.0.1:3000（或你设置的 PORT）。"
+if command -v nginx >/dev/null 2>&1; then
+  if grep -rq 'location \^~ /api/' /etc/nginx/ 2>/dev/null; then
+    log "Nginx 已配置 location ^~ /api/（图片/API 反代正常）。"
+  else
+    log "警告：未检测到 location ^~ /api/。请合并 deploy/nginx-hk-tuning.conf 后执行 sudo nginx -t && sudo systemctl reload nginx，否则头像/圈子图片会 404。"
+  fi
+fi
+
+log "完成。请确认 Nginx 的 root 指向 $WEB_ROOT，且 location ^~ /api/ 反代到 127.0.0.1:3000（或你设置的 PORT）。"

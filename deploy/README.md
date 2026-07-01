@@ -133,9 +133,14 @@ include /opt/spark/deploy/nginx-hk-tuning.conf;
 
 若已有 `location /api/`、`location /uploads/`，请**删除重复块**，只保留 tuning 文件里的一份，或把 tuning 文件中的 location 合并进现有配置。
 
-**头像 404 排查**：`nginx-hk-tuning.conf` 中 `/uploads/` 必须使用 `location ^~ /uploads/`。若写成普通 `location /uploads/`，会被同文件里 `~* \.(jpg|png|...)$` 抢走，nginx 会在前端 dist 里找 `/uploads/avatars/*.jpg` 而返回 404（上传接口 `/api/` 仍成功，但页面无法显示）。
+**头像 / 圈子图片 404 或 FAILED 排查**（上传成功但页面不显示）：
 
-`deploy/aliyun-ecs.sh` 在每次部署结束时会自动执行 `nginx -t` 并重载 Nginx（若本机已安装且配置检测通过）。首次改 Nginx 配置后仍需确认 `spark.conf` 已 `include` tuning 文件。
+1. **`location ^~ /api/` 必须存在**（注意 `^~`）。若只有 `location /api/`，会被同文件里 `~* \.(jpg|png|...)$` 抢走 `/api/uploads/*.png`，nginx 在前端 dist 里找文件而 404。
+2. **`location ^~ /uploads/`** 同样必须带 `^~`（兼容旧链接）。
+3. 前端图片地址已改为 **`/api/media?path=avatars/xxx.png`**（路径不以 `.png` 结尾，可绕过静态正则）。
+4. 后端对 `/api/media` 已排除全局限流（否则约 100 张图后全部 429）。
+
+`deploy/aliyun-ecs.sh` 部署结束时会检测是否配置了 `location ^~ /api/` 并尝试 `nginx -t` + reload。
 
 若需手动重载：
 

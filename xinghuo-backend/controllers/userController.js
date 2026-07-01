@@ -19,7 +19,7 @@ const toPublicUser = (user) => {
     id,
     account,
     username,
-    avatar,
+    avatar: rawAvatar,
     role,
     dark_mode,
     real_name,
@@ -28,6 +28,10 @@ const toPublicUser = (user) => {
     created_at,
     updated_at,
   } = user || {};
+  let avatar = typeof rawAvatar === 'string' ? rawAvatar.trim() : '';
+  if (!avatar || avatar.includes('trae-api-cn.mchost.guru')) {
+    avatar = '/default-avatar.svg';
+  }
   return {
     id,
     account,

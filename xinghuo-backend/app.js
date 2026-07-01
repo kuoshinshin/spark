@@ -4,6 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const compression = require('compression');
 const { rateLimit } = require('./middleware/rateLimit');
+const { createServeUploadMedia, isUploadMediaRequest } = require('./middleware/serveUploadMedia');
 require('dotenv').config();
 
 const app = express();
@@ -81,6 +82,10 @@ function serveAvatarUpload(req, res) {
 app.get('/uploads/avatars/:filename', serveAvatarUpload);
 app.head('/uploads/avatars/:filename', serveAvatarUpload);
 
+const serveUploadMedia = createServeUploadMedia(uploadsRoot);
+app.get('/api/media', serveUploadMedia);
+app.head('/api/media', serveUploadMedia);
+
 // 经 /api 反代访问上传文件，避免生产 Nginx 静态图片规则拦截 /uploads
 app.use(
   '/api/uploads',
@@ -105,10 +110,14 @@ app.use(rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
   message: '请求过于频繁，请稍后再试',
-  statusCode: 429
+  statusCode: 429,
+  skip: (req) => req.path === '/health' || isUploadMediaRequest(req),
 }));
 
 app.use((req, res, next) => {
+  if (isUploadMediaRequest(req)) {
+    return next();
+  }
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');

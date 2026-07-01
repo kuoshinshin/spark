@@ -7,7 +7,7 @@ class UserModel {
   }
 
   static async createWithConnection(conn, account, username, password, profile = {}) {
-    const defaultAvatar = `https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=PUBG%20player%20avatar%2C%20minimalist%20design%2C%20cartoon%20style%2C%20professional%20gaming%20avatar&image_size=square`;
+    const defaultAvatar = '/default-avatar.svg';
     const realName = typeof profile.realName === 'string' ? profile.realName.trim() : '';
     const phone = typeof profile.phone === 'string' ? profile.phone.trim() : '';
     const address = typeof profile.address === 'string' ? profile.address.trim() : '';

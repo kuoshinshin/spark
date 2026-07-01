@@ -17,7 +17,7 @@ server {
     root /home/deploy/www/xinghuo;
     index index.html;
 
-    location /api/ {
+    location ^~ /api/ {
         proxy_pass http://xinghuo_backend;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -62,7 +62,7 @@ server {
 #     root /home/deploy/www/xinghuo;
 #     index index.html;
 #
-#     location /api/ {
+#     location ^~ /api/ {
 #         proxy_pass http://xinghuo_backend;
 #         proxy_http_version 1.1;
 #         proxy_set_header Host $host;

@@ -102,7 +102,7 @@ if (import.meta.env.PROD) {
     const target = e.target
     if (target?.tagName !== 'IMG') return
     const src = String(target.src || '')
-    if (!src.includes('/uploads/') || src.includes('default-avatar')) return
+    if ((!src.includes('/uploads/') && !src.includes('/api/media')) || src.includes('default-avatar')) return
     handleAvatarImgError({ target })
   }, true)
 }

@@ -41,12 +41,12 @@ export function clearFailedAvatar(avatar) {
   const a = normalizeAvatar(avatar)
   if (!a || a === DEFAULT_AVATAR) return
   failedAvatarUrls.delete(a)
-  failedAvatarUrls.delete(resolveAvatarUrl(a))
+  const resolved = resolveMediaUrl(a)
+  failedAvatarUrls.delete(resolved)
   if (typeof window !== 'undefined') {
     failedAvatarUrls.delete(`${window.location.origin}${a}`)
-    const apiResolved = resolveAvatarUrl(a)
-    if (apiResolved.startsWith('/')) {
-      failedAvatarUrls.delete(`${window.location.origin}${apiResolved}`)
+    if (resolved.startsWith('/')) {
+      failedAvatarUrls.delete(`${window.location.origin}${resolved}`)
     }
   }
 }
