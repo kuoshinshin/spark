@@ -1,3 +1,5 @@
+import { resolveMediaUrl } from './mediaUrl'
+
 export const DEFAULT_AVATAR = '/default-avatar.svg'
 
 const failedAvatarUrls = new Set()
@@ -11,22 +13,10 @@ export function normalizeAvatar(avatar) {
 }
 
 function resolveAvatarUrl(path) {
-  if (path.startsWith('/uploads/') && typeof window !== 'undefined') {
-    return `${window.location.origin}${path}`
-  }
-  const explicit = import.meta.env.VITE_API_BASE_URL
-  if (explicit && /^https?:\/\//i.test(String(explicit).trim()) && path.startsWith('/')) {
-    try {
-      const base = String(explicit).replace(/\/$/, '')
-      return new URL(path, base).href
-    } catch {
-      return path
-    }
-  }
-  return path
+  return resolveMediaUrl(path)
 }
 
-/** 用于 <img> / el-avatar：相对路径在「前端与 API 不同源」时补全为可请求的绝对地址 */
+/** 用于 <img> / el-avatar：用户上传资源统一经 /api/uploads 访问 */
 export function avatarDisplayUrl(avatar, cacheBust) {
   const a = normalizeAvatar(avatar)
   if (a.startsWith('http://') || a.startsWith('https://') || a.startsWith('data:')) {
@@ -54,6 +44,10 @@ export function clearFailedAvatar(avatar) {
   failedAvatarUrls.delete(resolveAvatarUrl(a))
   if (typeof window !== 'undefined') {
     failedAvatarUrls.delete(`${window.location.origin}${a}`)
+    const apiResolved = resolveAvatarUrl(a)
+    if (apiResolved.startsWith('/')) {
+      failedAvatarUrls.delete(`${window.location.origin}${apiResolved}`)
+    }
   }
 }
 

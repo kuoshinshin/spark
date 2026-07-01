@@ -360,12 +360,12 @@ async function getMatchesBySeason(platform, playerId, seasonId, mode = '', page 
 }
 
 function calculatePowerLevel(score) {
-  if (score >= 920) return '魔王S';
-  if (score >= 780) return 'S';
-  if (score >= 620) return 'A';
-  if (score >= 520) return 'B';
-  if (score >= 430) return 'C';
-  if (score >= 350) return 'D';
+  if (score >= 840) return '魔王S';
+  if (score >= 700) return 'S';
+  if (score >= 560) return 'A';
+  if (score >= 460) return 'B';
+  if (score >= 380) return 'C';
+  if (score >= 300) return 'D';
   return 'E';
 }
 

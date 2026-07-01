@@ -1,13 +1,9 @@
 // API 服务
 
 import { triggerUnauthorized } from './sessionBridge'
+import { resolveApiBaseUrl } from '../utils/mediaUrl'
 
-function resolveApiBaseUrl() {
-  const explicit = import.meta.env.VITE_API_BASE_URL;
-  if (explicit) return String(explicit).replace(/\/$/, '');
-  if (import.meta.env.DEV) return 'http://127.0.0.1:3000/api';
-  return '/api';
-}
+export { resolveApiBaseUrl }
 
 // 基础 API URL（生产构建未设置 VITE_API_BASE_URL 时默认同源 /api，便于 Nginx 反代）
 const API_BASE_URL = resolveApiBaseUrl();

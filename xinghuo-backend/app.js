@@ -81,6 +81,15 @@ function serveAvatarUpload(req, res) {
 app.get('/uploads/avatars/:filename', serveAvatarUpload);
 app.head('/uploads/avatars/:filename', serveAvatarUpload);
 
+// 经 /api 反代访问上传文件，避免生产 Nginx 静态图片规则拦截 /uploads
+app.use(
+  '/api/uploads',
+  express.static(uploadsRoot, {
+    maxAge: isProd ? 7 * 24 * 60 * 60 * 1000 : 0,
+    fallthrough: false,
+  })
+);
+
 app.use(
   '/uploads',
   express.static(uploadsRoot, {
@@ -460,6 +469,30 @@ async function startServer() {
       'event_team_slots',
       'spark_score',
       'ALTER TABLE event_team_slots ADD COLUMN spark_score INT NULL AFTER pubg_player_name'
+    );
+    await ensureIndex(
+      'event_team_slots',
+      'uniq_event_team_slot',
+      'ALTER TABLE event_team_slots ADD UNIQUE KEY uniq_event_team_slot (event_team_id, slot_index)'
+    );
+    try {
+      const EventModel = require('./models/eventModel');
+      const deduped = await EventModel.dedupeOccupiedSlots();
+      if (deduped > 0) {
+        console.log(`[migrate] 已清理重复报名槽位：${deduped} 名用户`);
+      }
+    } catch (error) {
+      console.warn('[migrate] 清理重复报名槽位失败:', error?.message || error);
+    }
+    await ensureIndex(
+      'event_team_slots',
+      'uniq_event_user',
+      'ALTER TABLE event_team_slots ADD UNIQUE KEY uniq_event_user (event_id, user_id)'
+    );
+    await ensureIndex(
+      'event_team_slots',
+      'uniq_event_team_user',
+      'ALTER TABLE event_team_slots ADD UNIQUE KEY uniq_event_team_user (event_team_id, user_id)'
     );
     await connection.execute(`
       CREATE TABLE IF NOT EXISTS event_rounds (

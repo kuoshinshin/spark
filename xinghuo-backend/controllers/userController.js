@@ -736,6 +736,11 @@ class UserController {
               return fresh;
             },
           });
+      try {
+        await EventModel.syncUserSparkScore(userId, power?.score);
+      } catch (syncError) {
+        console.warn('同步报名星火战力失败:', syncError?.message || syncError);
+      }
       return res.json(power);
     } catch (error) {
       const mapped = UserController.mapPubgError(error);

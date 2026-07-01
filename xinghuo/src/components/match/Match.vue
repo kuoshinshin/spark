@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { eventApi } from '../../services/api'
 import { useAuthStore } from '../../stores/auth'
@@ -242,6 +242,20 @@ const fetchLobby = async () => {
   }
 }
 
+let lobbyPollTimer = null
+
+const refreshLobbySilently = async () => {
+  if (loading.value || actionLoading.value) return
+  try {
+    const data = await eventApi.getLobby()
+    event.value = data.event
+    teams.value = data.teams || []
+    mySlot.value = data.mySlot || null
+  } catch {
+    // 静默刷新失败不打断用户操作
+  }
+}
+
 const fetchStandings = async (withLoading = true) => {
   if (withLoading) standingsLoading.value = true
   try {
@@ -327,9 +341,30 @@ const handleLeave = async () => {
   }
 }
 
+const handlePageVisible = () => {
+  if (document.visibilityState !== 'visible') return
+  if (event.value?.status === 'registration') {
+    refreshLobbySilently()
+  }
+}
+
 onMounted(async () => {
   await fetchLobby()
   fetchHistoryList()
+  document.addEventListener('visibilitychange', handlePageVisible)
+  lobbyPollTimer = window.setInterval(() => {
+    if (event.value?.status === 'registration') {
+      refreshLobbySilently()
+    }
+  }, 30000)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('visibilitychange', handlePageVisible)
+  if (lobbyPollTimer) {
+    window.clearInterval(lobbyPollTimer)
+    lobbyPollTimer = null
+  }
 })
 
 watch(activeTab, (tab) => {

@@ -168,6 +168,7 @@ class EventController {
         return res.status(404).json({ error: '暂无杯赛' });
       }
       const teamId = Number(req.params.teamId);
+      await EventModel.refreshSlotSparkScores(event.id);
       const data = await EventModel.getTeamWithSlots(event.id, teamId);
       if (!data) {
         return res.status(404).json({ error: '队伍不存在' });
@@ -213,9 +214,7 @@ class EventController {
         return res.status(404).json({ error: '用户不存在' });
       }
       const powerCache = await UserModel.getPubgPowerCache(req.user.id);
-      const sparkScore = EventModel.resolveSparkScore({
-        pubg_power_cached_json: powerCache?.pubg_power_cached_json,
-      });
+      const sparkScore = EventModel.parsePowerCacheScore(powerCache?.pubg_power_cached_json);
       const result = await EventModel.joinSlot({
         eventId: event.id,
         teamId,

@@ -882,6 +882,7 @@ class EventModel {
        FROM event_team_slots s
        JOIN event_teams t ON t.id = s.event_team_id
        WHERE s.event_id = ? AND s.user_id = ?
+       ORDER BY s.joined_at ASC, s.id ASC
        LIMIT 1`,
       [eventId, userId]
     );
@@ -916,7 +917,7 @@ class EventModel {
     );
     await Promise.all(
       rows.map((row) => {
-        const score = EventModel.resolveSparkScore(row);
+        const score = EventModel.parsePowerCacheScore(row.pubg_power_cached_json);
         return pool.execute(
           'UPDATE event_team_slots SET spark_score = ? WHERE id = ?',
           [score, row.id]
@@ -937,8 +938,21 @@ class EventModel {
         await conn.rollback();
         return { ok: false, code: 'NOT_REGISTRATION' };
       }
+      // 锁定本赛事全部槽位，避免并发占坑竞态
+      await conn.execute(
+        'SELECT id FROM event_team_slots WHERE event_id = ? FOR UPDATE',
+        [eventId]
+      );
+      const [existingInTeam] = await conn.execute(
+        'SELECT id, slot_index FROM event_team_slots WHERE event_team_id = ? AND user_id = ? LIMIT 1',
+        [teamId, userId]
+      );
+      if (existingInTeam.length) {
+        await conn.rollback();
+        return { ok: false, code: 'ALREADY_JOINED' };
+      }
       const [existing] = await conn.execute(
-        'SELECT id FROM event_team_slots WHERE event_id = ? AND user_id = ? LIMIT 1',
+        'SELECT id, event_team_id FROM event_team_slots WHERE event_id = ? AND user_id = ? LIMIT 1',
         [eventId, userId]
       );
       if (existing.length) {
@@ -984,6 +998,9 @@ class EventModel {
       try {
         await conn.rollback();
       } catch (_) {}
+      if (e && (e.code === 'ER_DUP_ENTRY' || e.errno === 1062)) {
+        return { ok: false, code: 'ALREADY_JOINED' };
+      }
       throw e;
     } finally {
       conn.release();
@@ -1089,11 +1106,7 @@ class EventModel {
     return String(slotRow.pubg_player_name || slotRow.user_pubg_player_name || '').trim() || null;
   }
 
-  static resolveSparkScore(slotRow) {
-    if (slotRow.spark_score != null && Number.isFinite(Number(slotRow.spark_score))) {
-      return Math.round(Number(slotRow.spark_score));
-    }
-    const raw = slotRow.pubg_power_cached_json;
+  static parsePowerCacheScore(raw) {
     if (!raw) return null;
     try {
       const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
@@ -1103,6 +1116,68 @@ class EventModel {
     } catch {
       return null;
     }
+  }
+
+  static resolveSparkScore(slotRow) {
+    const fromCache = EventModel.parsePowerCacheScore(slotRow.pubg_power_cached_json);
+    if (fromCache != null) return fromCache;
+    if (slotRow.spark_score != null && Number.isFinite(Number(slotRow.spark_score))) {
+      return Math.round(Number(slotRow.spark_score));
+    }
+    return null;
+  }
+
+  static async syncUserSparkScore(userId, score) {
+    const rounded = score != null && Number.isFinite(Number(score)) ? Math.round(Number(score)) : null;
+    await pool.execute(
+      `UPDATE event_team_slots s
+       JOIN events e ON e.id = s.event_id
+       SET s.spark_score = ?
+       WHERE s.user_id = ? AND e.status = 'registration'`,
+      [rounded, userId]
+    );
+  }
+
+  static async dedupeOccupiedSlots() {
+    const [dupes] = await pool.execute(
+      `SELECT event_id, user_id
+       FROM event_team_slots
+       WHERE user_id IS NOT NULL
+       GROUP BY event_id, user_id
+       HAVING COUNT(*) > 1`
+    );
+    for (const row of dupes) {
+      const [slots] = await pool.execute(
+        `SELECT id, slot_index, event_team_id
+         FROM event_team_slots
+         WHERE event_id = ? AND user_id = ?
+         ORDER BY joined_at ASC, id ASC`,
+        [row.event_id, row.user_id]
+      );
+      const keep = slots[0];
+      for (let i = 1; i < slots.length; i += 1) {
+        const duplicate = slots[i];
+        await pool.execute(
+          `UPDATE event_team_slots
+           SET user_id = NULL, display_name = NULL, pubg_player_name = NULL, spark_score = NULL, joined_at = NULL
+           WHERE id = ?`,
+          [duplicate.id]
+        );
+        if (Number(duplicate.slot_index) === 0) {
+          await pool.execute(
+            'UPDATE event_teams SET captain_user_id = NULL WHERE id = ?',
+            [duplicate.event_team_id]
+          );
+        }
+      }
+      if (keep && Number(keep.slot_index) === 0) {
+        await pool.execute(
+          'UPDATE event_teams SET captain_user_id = ? WHERE id = ?',
+          [row.user_id, keep.event_team_id]
+        );
+      }
+    }
+    return dupes.length;
   }
 
   static buildLobby(teams, slots) {
