@@ -58,6 +58,9 @@ router.get('/pubg/seasons', verifyToken, verifyUser, UserController.getPubgSeaso
 // PUBG 星火战力（需要认证）
 router.get('/pubg/power', verifyToken, verifyUser, UserController.getPubgPower);
 
+// 星火战力排行榜（需要认证）
+router.get('/pubg/power-leaderboard', verifyToken, verifyUser, UserController.getPowerLeaderboard);
+
 // PUBG 单场详情（需要认证）
 router.get('/pubg/matches/:matchId', verifyToken, verifyUser, UserController.getPubgMatchDetail);
 

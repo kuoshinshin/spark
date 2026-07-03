@@ -575,6 +575,11 @@ export const userApi = {
     return request(`/user/pubg/power${qs}`);
   },
 
+  getPowerLeaderboard: async (params = {}) => {
+    const qs = toQueryString(params);
+    return request(`/user/pubg/power-leaderboard${qs ? `?${qs}` : ''}`);
+  },
+
   // PUBG 单场详情
   getPubgMatchDetail: async (matchId) => {
     return request(`/user/pubg/matches/${matchId}`);

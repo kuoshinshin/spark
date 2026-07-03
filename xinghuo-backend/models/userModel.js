@@ -180,6 +180,19 @@ class UserModel {
       history: [],
     };
   }
+
+  static async listPowerLeaderboardCandidates() {
+    const [rows] = await pool.execute(
+      `SELECT id, username, real_name, avatar, pubg_player_name,
+              pubg_power_cached_json, pubg_power_cached_at
+       FROM users
+       WHERE pubg_power_cached_json IS NOT NULL
+         AND TRIM(pubg_power_cached_json) <> ''
+         AND TRIM(pubg_power_cached_json) <> '{}'
+       ORDER BY pubg_power_cached_at DESC`
+    );
+    return rows;
+  }
 }
 
 module.exports = UserModel;

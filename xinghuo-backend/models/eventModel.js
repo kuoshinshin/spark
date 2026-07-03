@@ -1180,6 +1180,27 @@ class EventModel {
     return dupes.length;
   }
 
+  static parsePowerCacheEntry(raw) {
+    if (!raw) return null;
+    try {
+      const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      const score = EventModel.parsePowerCacheScore(raw);
+      if (score == null || score <= 0) return null;
+      return {
+        score,
+        level: data?.level || null,
+        kd: Number(data?.kd || 0),
+        avgDamage: Number(data?.avgDamage || 0),
+        matchesAnalyzed: Number(data?.matchesAnalyzed || 0),
+        sampleLimited: Boolean(data?.sampleLimited),
+        formulaVersion: data?.formulaVersion || null,
+        seasonId: data?.seasonId || null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   static buildLobby(teams, slots) {
     const slotMap = new Map();
     slots.forEach((s) => {

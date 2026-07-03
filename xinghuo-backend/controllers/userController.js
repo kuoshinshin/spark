@@ -751,6 +751,61 @@ class UserController {
       return res.status(mapped.statusCode).json({ error: mapped.message });
     }
   }
+
+  static resolveLeaderboardDisplayName(user) {
+    const realName = String(user?.real_name || '').trim();
+    if (realName) return realName;
+    return String(user?.username || '').trim() || '未知用户';
+  }
+
+  static async getPowerLeaderboard(req, res) {
+    try {
+      const limit = Math.min(200, Math.max(1, Number(req.query?.limit) || 100));
+      const rows = await UserModel.listPowerLeaderboardCandidates();
+      const currentUserId = Number(req.user.id);
+
+      const entries = [];
+      rows.forEach((row) => {
+        const power = EventModel.parsePowerCacheEntry(row.pubg_power_cached_json);
+        if (!power) return;
+        entries.push({
+          userId: row.id,
+          username: row.username,
+          realName: UserController.resolveLeaderboardDisplayName(row),
+          avatar: row.avatar,
+          pubgPlayerName: row.pubg_player_name || null,
+          cachedAt: row.pubg_power_cached_at,
+          ...power,
+        });
+      });
+
+      entries.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        if (b.matchesAnalyzed !== a.matchesAnalyzed) return b.matchesAnalyzed - a.matchesAnalyzed;
+        return a.userId - b.userId;
+      });
+
+      const leaderboard = entries.slice(0, limit).map((entry, index) => ({
+        ...entry,
+        rank: index + 1,
+      }));
+
+      const myIndex = entries.findIndex((entry) => entry.userId === currentUserId);
+      const myRank = myIndex >= 0
+        ? { ...entries[myIndex], rank: myIndex + 1 }
+        : null;
+
+      res.json({
+        formulaVersion: 'v2',
+        total: entries.length,
+        leaderboard,
+        myRank,
+      });
+    } catch (error) {
+      console.error('获取星火战力排行榜失败:', error);
+      res.status(500).json({ error: '获取星火战力排行榜失败' });
+    }
+  }
 }
 
 module.exports = UserController;

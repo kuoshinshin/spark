@@ -38,6 +38,11 @@ const router = createRouter({
           component: () => import('../components/match/Match.vue')
         },
         {
+          path: 'power-rank',
+          name: 'powerRank',
+          component: () => import('../components/rank/PowerRank.vue')
+        },
+        {
           path: 'bean-lobby',
           name: 'beanLobby',
           component: () => import('../components/bean/BeanLobby.vue')
