@@ -359,13 +359,27 @@ async function getMatchesBySeason(platform, playerId, seasonId, mode = '', page 
   };
 }
 
+const POWER_SCORE_V2 = {
+  KD_CAP: 4,
+  DAMAGE_CAP: 450,
+  KD_WEIGHT: 0.7,
+  DAMAGE_WEIGHT: 0.3,
+  CONFIDENCE_ROUNDS: 25,
+  PRIOR_SCORE: 350,
+};
+
+function isSquadRankedModeKey(key) {
+  const mode = String(key || '').toLowerCase();
+  return mode === 'squad' || mode === 'squad-fpp';
+}
+
 function calculatePowerLevel(score) {
-  if (score >= 840) return '魔王S';
-  if (score >= 700) return 'S';
-  if (score >= 560) return 'A';
-  if (score >= 460) return 'B';
-  if (score >= 380) return 'C';
-  if (score >= 300) return 'D';
+  if (score >= 820) return '魔王S';
+  if (score >= 720) return 'S';
+  if (score >= 620) return 'A';
+  if (score >= 520) return 'B';
+  if (score >= 420) return 'C';
+  if (score >= 320) return 'D';
   return 'E';
 }
 
@@ -378,14 +392,70 @@ function buildEmptyPowerScore(seasonId = '') {
     avgRank: 0,
     matchesAnalyzed: 0,
     seasonId,
+    formulaVersion: 'v2',
+    baseScore: 0,
+    confidence: 0,
+    sampleLimited: false,
     factors: {
       kdFactor: 0,
-      damageFactor: 0
-    }
+      damageFactor: 0,
+    },
   };
 }
 
-/** 合并当前赛季各排位模式（solo/duo/squad 及 FPP）的官方聚合统计 */
+/** 合并当前赛季四排排位（squad / squad-fpp）官方聚合统计 */
+function aggregateSquadRankedSeasonStats(rankedGameModeStats = {}) {
+  const entries = Object.entries(rankedGameModeStats).filter(
+    ([key, stats]) => isSquadRankedModeKey(key) && stats
+  );
+  if (!entries.length) return null;
+
+  let roundsPlayed = 0;
+  let kills = 0;
+  let deaths = 0;
+  let damageDealt = 0;
+  let rankWeightedSum = 0;
+
+  entries.forEach(([, stats]) => {
+    const rounds = Number(stats?.roundsPlayed || 0);
+    if (rounds <= 0) return;
+    roundsPlayed += rounds;
+    kills += Number(stats?.kills || 0);
+    deaths += Number(stats?.deaths || 0);
+    damageDealt += Number(stats?.damageDealt || 0);
+    rankWeightedSum += Number(stats?.avgRank || 0) * rounds;
+  });
+
+  if (roundsPlayed <= 0) return null;
+
+  const kd = deaths > 0 ? kills / deaths : kills;
+  return {
+    roundsPlayed,
+    kd,
+    avgDamage: damageDealt / roundsPlayed,
+    avgRank: rankWeightedSum / roundsPlayed,
+  };
+}
+
+function computePowerScoreV2(aggregated) {
+  const { roundsPlayed, kd, avgDamage } = aggregated;
+  const kdFactor = Math.min(kd, POWER_SCORE_V2.KD_CAP) / POWER_SCORE_V2.KD_CAP;
+  const damageFactor = Math.min(avgDamage, POWER_SCORE_V2.DAMAGE_CAP) / POWER_SCORE_V2.DAMAGE_CAP;
+  const baseScore = (kdFactor * POWER_SCORE_V2.KD_WEIGHT + damageFactor * POWER_SCORE_V2.DAMAGE_WEIGHT) * 1000;
+  const confidence = Math.min(1, Math.sqrt(roundsPlayed / POWER_SCORE_V2.CONFIDENCE_ROUNDS));
+  const score = Math.round(baseScore * confidence + POWER_SCORE_V2.PRIOR_SCORE * (1 - confidence));
+
+  return {
+    score,
+    baseScore: Math.round(baseScore),
+    confidence: Number(confidence.toFixed(4)),
+    sampleLimited: roundsPlayed < POWER_SCORE_V2.CONFIDENCE_ROUNDS,
+    kdFactor: Number(kdFactor.toFixed(4)),
+    damageFactor: Number(damageFactor.toFixed(4)),
+  };
+}
+
+/** @deprecated 仅 lifetime 总览等场景保留；战力值请用 aggregateSquadRankedSeasonStats */
 function aggregateRankedSeasonStats(rankedGameModeStats = {}) {
   const entries = Object.values(rankedGameModeStats).filter(Boolean);
   if (!entries.length) return null;
@@ -437,25 +507,27 @@ async function getCompetitivePowerScore(platform, playerId) {
     throw error;
   }
 
-  const aggregated = aggregateRankedSeasonStats(rankedData?.attributes?.rankedGameModeStats || {});
+  const aggregated = aggregateSquadRankedSeasonStats(rankedData?.attributes?.rankedGameModeStats || {});
   if (!aggregated) return buildEmptyPowerScore(seasonId);
 
-  const kdFactor = Math.min(aggregated.kd, 5) / 5;
-  const damageFactor = Math.min(aggregated.avgDamage, 600) / 600;
-  const score = Math.round((kdFactor * 0.85 + damageFactor * 0.15) * 1000);
+  const computed = computePowerScoreV2(aggregated);
 
   return {
-    score,
-    level: calculatePowerLevel(score),
+    score: computed.score,
+    level: calculatePowerLevel(computed.score),
     kd: Number(aggregated.kd.toFixed(2)),
     avgDamage: Number(aggregated.avgDamage.toFixed(1)),
     avgRank: Number(aggregated.avgRank.toFixed(1)),
     matchesAnalyzed: aggregated.roundsPlayed,
     seasonId,
+    formulaVersion: 'v2',
+    baseScore: computed.baseScore,
+    confidence: computed.confidence,
+    sampleLimited: computed.sampleLimited,
     factors: {
-      kdFactor: Number(kdFactor.toFixed(4)),
-      damageFactor: Number(damageFactor.toFixed(4))
-    }
+      kdFactor: computed.kdFactor,
+      damageFactor: computed.damageFactor,
+    },
   };
 }
 

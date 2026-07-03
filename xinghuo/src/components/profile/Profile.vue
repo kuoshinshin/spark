@@ -3,6 +3,7 @@ import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { userApi } from '../../services/api'
 import { DEFAULT_AVATAR, normalizeAvatar, avatarDisplayUrl, handleAvatarImgError, clearFailedAvatar } from '../../utils/avatar'
+import { POWER_SCORE_V2 } from '../../utils/sparkLevel'
 import { useAuthStore } from '../../stores/auth'
 
 // 用户数据
@@ -52,13 +53,13 @@ const cupHistoryLoading = ref(false)
 const expandedMobileMatchId = ref(null)
 const powerFormulaDialogVisible = ref(false)
 const powerRankPreviewList = [
-  { key: 'e', level: 'E', desc: '新火初燃', range: '< 300' },
-  { key: 'd', level: 'D', desc: '基础磨炼', range: '300 - 379' },
-  { key: 'c', level: 'C', desc: '潜力成长', range: '380 - 459' },
-  { key: 'b', level: 'B', desc: '进阶战士', range: '460 - 559' },
-  { key: 'a', level: 'A', desc: '稳定强者', range: '560 - 699' },
-  { key: 's', level: 'S', desc: '顶尖高手', range: '700 - 839' },
-  { key: 'demon-s', level: '魔王S', desc: '魔王降临', range: '>= 840' }
+  { key: 'e', level: 'E', desc: '新火初燃', range: '< 320' },
+  { key: 'd', level: 'D', desc: '基础磨炼', range: '320 - 419' },
+  { key: 'c', level: 'C', desc: '潜力成长', range: '420 - 519' },
+  { key: 'b', level: 'B', desc: '进阶战士', range: '520 - 619' },
+  { key: 'a', level: 'A', desc: '稳定强者', range: '620 - 719' },
+  { key: 's', level: 'S', desc: '顶尖高手', range: '720 - 819' },
+  { key: 'demon-s', level: '魔王S', desc: '魔王降临', range: '>= 820' }
 ]
 const getOverviewByType = (stats, type) => {
   if (!stats) return null
@@ -71,10 +72,15 @@ const currentOverviewStats = computed(() => getOverviewByType(pubgStats.value, o
 const pubgPowerTone = computed(() => {
   const score = Number(pubgPower.value?.score || 0)
   if (score >= 820) return 'legend'
-  if (score >= 700) return 'high'
-  if (score >= 570) return 'mid'
-  if (score >= 460) return 'base'
+  if (score >= 720) return 'high'
+  if (score >= 620) return 'mid'
+  if (score >= 520) return 'base'
   return 'low'
+})
+const pubgPowerSampleHint = computed(() => {
+  if (!pubgPower.value?.sampleLimited) return ''
+  const rounds = Number(pubgPower.value?.matchesAnalyzed || 0)
+  return `四排样本偏少（${rounds}/${POWER_SCORE_V2.CONFIDENCE_ROUNDS} 场），战力已向基准值回归`
 })
 const pubgPowerLevelKey = computed(() => {
   const level = String(pubgPower.value?.level || '').trim().toUpperCase()
@@ -1224,7 +1230,7 @@ onBeforeUnmount(() => {
                 <div class="card-heading-stack">
                   <h3 class="pubg-card-title">星火战力值</h3>
                   <p class="power-subtitle">
-                    当前赛季排位综合评分
+                    当前赛季四排排位评分（v2）
                     <span v-if="pubgPowerSeasonLabel">（{{ pubgPowerSeasonLabel }}）</span>
                   </p>
                 </div>
@@ -1246,11 +1252,12 @@ onBeforeUnmount(() => {
                   <span class="power-hero-level-desc">{{ pubgPowerLevelText }}</span>
                 </div>
               </div>
+              <p v-if="pubgPowerSampleHint" class="power-sample-hint">{{ pubgPowerSampleHint }}</p>
               <div class="power-metrics" v-if="pubgPower">
                 <div class="power-metric-item"><span class="power-metric-label">KD</span><span class="power-metric-value">{{ pubgPower.kd }}</span></div>
                 <div class="power-metric-item"><span class="power-metric-label">场均伤害</span><span class="power-metric-value">{{ pubgPower.avgDamage }}</span></div>
-                <div class="power-metric-item"><span class="power-metric-label">平均排名</span><span class="power-metric-value">{{ pubgPower.avgRank }}</span></div>
-                <div class="power-metric-item"><span class="power-metric-label">排位场次</span><span class="power-metric-value">{{ pubgPower.matchesAnalyzed }}</span></div>
+                <div class="power-metric-item"><span class="power-metric-label">四排场次</span><span class="power-metric-value">{{ pubgPower.matchesAnalyzed }}</span></div>
+                <div class="power-metric-item"><span class="power-metric-label">样本置信</span><span class="power-metric-value">{{ pubgPower.confidence != null ? Math.round(pubgPower.confidence * 100) + '%' : '--' }}</span></div>
               </div>
               <button
                 v-if="pubgPower"
@@ -1272,18 +1279,19 @@ onBeforeUnmount(() => {
                 <section class="power-formula-section">
                   <span class="section-kicker">FORMULA</span>
                   <h4>计算方式</h4>
-                  <p class="power-formula-equation">战力值 = round((KD因子 × 0.85 + 伤害因子 × 0.15) × 1000)</p>
-                  <p class="power-formula-hint">数据来源：PUBG 官方当前赛季排位统计（/seasons/{seasonId}/ranked），合并 solo / duo / squad 及各 FPP 模式。</p>
+                  <p class="power-formula-equation">基础分 = (KD因子 × 0.70 + 伤害因子 × 0.30) × 1000</p>
+                  <p class="power-formula-equation">战力值 = round(基础分 × 置信度 + 350 × (1 - 置信度))</p>
+                  <p class="power-formula-hint">数据来源：PUBG 官方当前赛季四排排位（squad / squad-fpp），不含单排、双排。置信度 = min(1, √(四排场次 / 25))。</p>
                   <div class="power-factor-grid">
                     <div class="power-factor-item">
-                      <span>KD 因子（85%）</span>
-                      <strong>min(赛季排位 KD, 5) / 5</strong>
-                      <span class="power-factor-note">KD = 击杀 / 死亡（官方 ranked 聚合）</span>
+                      <span>KD 因子（70%）</span>
+                      <strong>min(四排 KD, 4) / 4</strong>
+                      <span class="power-factor-note">KD = 击杀 / 死亡</span>
                     </div>
                     <div class="power-factor-item">
-                      <span>伤害因子（15%）</span>
-                      <strong>min(场均伤害, 600) / 600</strong>
-                      <span class="power-factor-note">场均伤害 = 赛季累计伤害 / 排位场次</span>
+                      <span>伤害因子（30%）</span>
+                      <strong>min(场均伤害, 450) / 450</strong>
+                      <span class="power-factor-note">场均伤害 = 四排累计伤害 / 四排场次</span>
                     </div>
                   </div>
                 </section>
@@ -3245,6 +3253,13 @@ onBeforeUnmount(() => {
   margin-top: 0.2rem;
   font-size: 0.75rem;
   color: #8a97ab;
+}
+
+.power-sample-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  color: #b45309;
+  line-height: 1.45;
 }
 
 .power-score {
