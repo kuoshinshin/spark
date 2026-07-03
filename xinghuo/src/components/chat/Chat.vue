@@ -173,6 +173,32 @@ const mapNotificationContent = (item) => {
   return '你有一条新通知'
 }
 
+const normalizePost = (post) => {
+  if (!post || typeof post !== 'object') return post
+  const media = post.media || null
+  const mediaType = post.mediaType || post.media_type || (media ? 'image' : null)
+  const userId = post.userId || post.user_id
+  const username = post.username || post.user?.name || '未知用户'
+  const avatar = normalizeAvatar(post.avatar || post.user?.avatar)
+  const timestamp = post.timestamp || post.created_at || null
+  const user = post.user || {
+    id: userId,
+    name: username,
+    avatar,
+  }
+  return {
+    ...post,
+    media,
+    mediaType,
+    userId,
+    username,
+    avatar,
+    timestamp,
+    user,
+    likes: Number(post.likes || 0),
+  }
+}
+
 const normalizeNotifications = (list) => {
   if (!Array.isArray(list)) return []
   const mapped = list.map(item => ({
@@ -561,7 +587,7 @@ const fetchPosts = async ({ silent = false } = {}) => {
   }
   try {
     const response = await chatApi.getMessages()
-    posts.value = response
+    posts.value = (Array.isArray(response) ? response : []).map(normalizePost)
     // 初始化评论输入框和评论相关状态
     posts.value.forEach(post => {
       commentInputs.value[post.id] = ''
@@ -671,19 +697,13 @@ const publishPost = async () => {
       media: postMedia.value,
       mediaType: mediaType.value
     })
-    
-    // 添加新帖子到列表
+
+    const created = normalizePost(response)
     const newPost = {
-      id: response.id,
-      user: currentUser.value,
-      content: postContent.value.trim(),
-      media: postMedia.value,
-      mediaType: mediaType.value,
+      ...created,
       timestamp: '刚刚',
-      likes: 0,
-      comments: [],
       isLiked: false,
-      isMine: true
+      isMine: true,
     }
     
     posts.value.unshift(newPost)
@@ -1134,7 +1154,7 @@ watch(
                   <p>{{ post.content }}</p>
                   <div v-if="post.media" class="post-media-container moments-media">
                     <el-image
-                      v-if="post.mediaType === 'image'"
+                      v-if="post.mediaType !== 'video'"
                       :src="mediaDisplayUrl(post.media)"
                       :preview-src-list="[mediaDisplayUrl(post.media)]"
                       preview-teleported

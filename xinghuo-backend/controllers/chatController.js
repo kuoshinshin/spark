@@ -3,6 +3,23 @@ const NotificationModel = require('../models/notificationModel');
 const fs = require('fs');
 
 class ChatController {
+  static formatChatRow(row) {
+    if (!row) return row;
+    const media = row.media || null;
+    const mediaType = row.media_type || row.mediaType || (media ? 'image' : null);
+    return {
+      ...row,
+      media,
+      mediaType,
+      userId: row.user_id ?? row.userId,
+      createdAt: row.created_at || row.createdAt,
+    };
+  }
+
+  static formatChatList(rows) {
+    return (Array.isArray(rows) ? rows : []).map((row) => ChatController.formatChatRow(row));
+  }
+
   // 上传圈子帖子图片
   static async uploadMedia(req, res) {
     try {
@@ -36,8 +53,8 @@ class ChatController {
       
       // 获取新创建的消息（包含完整信息）
       const [newMessage] = await ChatModel.getAll();
-      
-      res.status(201).json(newMessage);
+
+      res.status(201).json(ChatController.formatChatRow(newMessage));
     } catch (error) {
       console.error('发送消息失败:', error);
       res.status(500).json({ error: '发送消息失败，请联系管理员' });
@@ -48,7 +65,7 @@ class ChatController {
   static async getAllMessages(req, res) {
     try {
       const messages = await ChatModel.getAll();
-      res.json(messages);
+      res.json(ChatController.formatChatList(messages));
     } catch (error) {
       console.error('获取消息失败:', error);
       res.status(500).json({ error: '获取消息失败，请联系管理员' });
@@ -59,7 +76,7 @@ class ChatController {
   static async getHottestMessages(req, res) {
     try {
       const messages = await ChatModel.getHottest();
-      res.json(messages);
+      res.json(ChatController.formatChatList(messages));
     } catch (error) {
       console.error('获取热门消息失败:', error);
       res.status(500).json({ error: '获取热门消息失败，请联系管理员' });
@@ -71,7 +88,7 @@ class ChatController {
     try {
       const userId = req.user.id;
       const messages = await ChatModel.getByUserId(userId);
-      res.json(messages);
+      res.json(ChatController.formatChatList(messages));
     } catch (error) {
       console.error('获取用户消息失败:', error);
       res.status(500).json({ error: '获取用户消息失败，请联系管理员' });
