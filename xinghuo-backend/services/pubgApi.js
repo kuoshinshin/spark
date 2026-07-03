@@ -374,12 +374,12 @@ function isSquadRankedModeKey(key) {
 }
 
 function calculatePowerLevel(score) {
-  if (score >= 820) return '魔王S';
-  if (score >= 720) return 'S';
-  if (score >= 620) return 'A';
-  if (score >= 520) return 'B';
-  if (score >= 420) return 'C';
-  if (score >= 320) return 'D';
+  if (score >= 720) return '魔王S';
+  if (score >= 620) return 'S';
+  if (score >= 520) return 'A';
+  if (score >= 430) return 'B';
+  if (score >= 350) return 'C';
+  if (score >= 280) return 'D';
   return 'E';
 }
 

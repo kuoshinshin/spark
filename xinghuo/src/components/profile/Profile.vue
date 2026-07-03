@@ -53,13 +53,13 @@ const cupHistoryLoading = ref(false)
 const expandedMobileMatchId = ref(null)
 const powerFormulaDialogVisible = ref(false)
 const powerRankPreviewList = [
-  { key: 'e', level: 'E', desc: '新火初燃', range: '< 320' },
-  { key: 'd', level: 'D', desc: '基础磨炼', range: '320 - 419' },
-  { key: 'c', level: 'C', desc: '潜力成长', range: '420 - 519' },
-  { key: 'b', level: 'B', desc: '进阶战士', range: '520 - 619' },
-  { key: 'a', level: 'A', desc: '稳定强者', range: '620 - 719' },
-  { key: 's', level: 'S', desc: '顶尖高手', range: '720 - 819' },
-  { key: 'demon-s', level: '魔王S', desc: '魔王降临', range: '>= 820' }
+  { key: 'e', level: 'E', desc: '新火初燃', range: '< 280' },
+  { key: 'd', level: 'D', desc: '基础磨炼', range: '280 - 349' },
+  { key: 'c', level: 'C', desc: '潜力成长', range: '350 - 429' },
+  { key: 'b', level: 'B', desc: '进阶战士', range: '430 - 519' },
+  { key: 'a', level: 'A', desc: '稳定强者', range: '520 - 619' },
+  { key: 's', level: 'S', desc: '顶尖高手', range: '620 - 719' },
+  { key: 'demon-s', level: '魔王S', desc: '魔王降临', range: '>= 720' }
 ]
 const getOverviewByType = (stats, type) => {
   if (!stats) return null
@@ -71,10 +71,10 @@ const getOverviewByType = (stats, type) => {
 const currentOverviewStats = computed(() => getOverviewByType(pubgStats.value, overviewType.value))
 const pubgPowerTone = computed(() => {
   const score = Number(pubgPower.value?.score || 0)
-  if (score >= 820) return 'legend'
-  if (score >= 720) return 'high'
-  if (score >= 620) return 'mid'
-  if (score >= 520) return 'base'
+  if (score >= 700) return 'legend'
+  if (score >= 620) return 'high'
+  if (score >= 520) return 'mid'
+  if (score >= 430) return 'base'
   return 'low'
 })
 const pubgPowerSampleHint = computed(() => {
