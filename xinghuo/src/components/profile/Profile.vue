@@ -42,7 +42,6 @@ const pubgMastery = ref(null)
 const pubgClan = ref(null)
 const masteryLoading = ref(false)
 const clanLoading = ref(false)
-const powerSeasonId = ref('')
 const pubgLoading = ref(false)
 const isRefreshingStats = ref(false)
 const isRebinding = ref(false)
@@ -53,7 +52,6 @@ const matchDetailLoading = ref(false)
 const matchDetailMap = ref({})
 const expandedRowLoadingMap = ref({})
 const expandedMatchRowKeys = ref([])
-const seasonOptions = ref([])
 const seasonFilterNote = ref('')
 const matchQuery = ref({
   page: 1,
@@ -142,9 +140,6 @@ const currentModeBreakdown = computed(() => {
   const key = overviewType.value === 'ranked' ? 'ranked' : 'normal'
   return pubgStats.value?.modeBreakdown?.[key] || null
 })
-const powerSeasonOptions = computed(() =>
-  (seasonOptions.value || []).filter((item) => !String(item.value || '').includes('lifetime'))
-)
 const formatPct = (v) => {
   if (v == null || Number.isNaN(Number(v))) return '--'
   const n = Number(v)
@@ -287,46 +282,6 @@ const toggleMobileMatch = async (row) => {
   await handleViewMatchDetail(row)
 }
 
-const formatSeasonLabel = (seasonId, isCurrentSeason = false) => {
-  const text = String(seasonId || '').trim()
-  if (!text) return ''
-
-  if (text === 'lifetime') {
-    return isCurrentSeason ? '生涯总计（当前）' : '生涯总计'
-  }
-
-  const raw = text.includes('.') ? text.slice(text.lastIndexOf('.') + 1) : text
-  const platformPrefixMap = {
-    pc: 'PC',
-    playstation: 'PS',
-    xbox: 'Xbox',
-    console: '主机'
-  }
-
-  let base = ''
-  const platformSeasonMatch = raw.match(/^(pc|playstation|xbox|console)-(.+)$/i)
-  if (platformSeasonMatch) {
-    const platformKey = platformSeasonMatch[1].toLowerCase()
-    const seasonPart = platformSeasonMatch[2]
-    const platformLabel = platformPrefixMap[platformKey] || platformSeasonMatch[1]
-    const yearSeasonMatch = seasonPart.match(/^(\d{4})-(\d+)$/)
-    const pureNumberMatch = seasonPart.match(/^(\d+)$/)
-
-    if (yearSeasonMatch) {
-      base = `${platformLabel} ${yearSeasonMatch[1]}年第${Number(yearSeasonMatch[2])}赛季`
-    } else if (pureNumberMatch) {
-      base = `${platformLabel} 第${Number(pureNumberMatch[1])}赛季`
-    } else {
-      base = `${platformLabel} ${seasonPart}`
-    }
-  } else {
-    const pureNumberMatch = raw.match(/^(\d+)$/)
-    base = pureNumberMatch ? `第${Number(pureNumberMatch[1])}赛季` : raw
-  }
-
-  return isCurrentSeason ? `${base}（当前）` : base
-}
-
 const animatePubgNumbers = (targetStats) => {
   if (!targetStats) {
     animatedStats.value = { roundsPlayed: 0, wins: 0, kills: 0, kdRatio: 0, winRate: 0 }
@@ -433,7 +388,6 @@ const applyPublicUserPayload = (payload) => {
   }
   pubgMatches.value = []
   pubgMatchesTotal.value = 0
-  seasonOptions.value = []
   animatePubgNumbers(pubgVisual.value)
   editedUserData.value = null
   isEditing.value = false
@@ -463,7 +417,6 @@ const fetchUserData = async () => {
       if (userData.value.pubgBinding?.playerId) {
         Promise.allSettled([
           fetchPubgPower(),
-          fetchPubgSeasons(),
           fetchPubgMatches(),
           fetchPubgMastery(),
           fetchPubgClan()
@@ -556,7 +509,6 @@ const handleBindPubg = async () => {
     animatePubgNumbers(pubgVisual.value)
     await Promise.allSettled([
       fetchPubgPower(),
-      fetchPubgSeasons(),
       fetchPubgMatches(),
       fetchPubgMastery(),
       fetchPubgClan()
@@ -579,12 +531,10 @@ const handleUnbindPubg = async () => {
     pubgPower.value = null
     pubgMastery.value = null
     pubgClan.value = null
-    powerSeasonId.value = ''
     animatePubgNumbers(null)
     pubgMatches.value = []
     pubgMatchesTotal.value = 0
-    seasonOptions.value = []
-    seasonFilterNote.value = ''
+      seasonFilterNote.value = ''
     pubgBindingForm.value = {
       playerName: '',
       platform: 'steam'
@@ -611,7 +561,6 @@ const handleRefreshPubgStats = async () => {
   try {
     await fetchPubgOverview()
     await fetchPubgPower()
-    await fetchPubgSeasons()
     await fetchPubgMatches()
     await fetchPubgMastery()
     await fetchPubgClan()
@@ -642,7 +591,7 @@ const fetchPubgPower = async () => {
   }
   pubgPowerLoading.value = true
   try {
-    const data = await userApi.getPubgPower(false, powerSeasonId.value)
+    const data = await userApi.getPubgPower(false)
     pubgPower.value = data || null
   } finally {
     pubgPowerLoading.value = false
@@ -678,18 +627,6 @@ const fetchPubgClan = async () => {
     clanLoading.value = false
   }
 }
-const handlePowerSeasonChange = async (seasonId) => {
-  powerSeasonId.value = seasonId || ''
-  if (!isOwnProfile.value) return
-  pubgPowerLoading.value = true
-  try {
-    pubgPower.value = await userApi.getPubgPower(false, powerSeasonId.value)
-  } catch (e) {
-    ElMessage.error(e.message || '加载赛季战力失败')
-  } finally {
-    pubgPowerLoading.value = false
-  }
-}
 const handleOverviewTypeChange = (type) => {
   overviewType.value = type
   animatePubgNumbers(pubgVisual.value)
@@ -711,35 +648,6 @@ const fetchPubgMatches = async () => {
   } finally {
     matchesLoading.value = false
   }
-}
-
-const fetchPubgSeasons = async () => {
-  if (!isOwnProfile.value || !isPubgBound.value) {
-    if (!isOwnProfile.value) return
-    seasonOptions.value = []
-    return
-  }
-  const data = await userApi.getPubgSeasons()
-  const raw = (data?.seasons || []).map((item) => ({
-    value: item.id,
-    label: formatSeasonLabel(item.id, item.isCurrentSeason)
-  }))
-
-  const labelCount = raw.reduce((acc, cur) => {
-    acc[cur.label] = (acc[cur.label] || 0) + 1
-    return acc
-  }, {})
-
-  seasonOptions.value = raw.map((item) => {
-    if (labelCount[item.label] <= 1) return item
-    return {
-      ...item,
-      label: `${item.label}（${item.value}）`
-    }
-  })
-
-  const current = (data?.seasons || []).find((s) => s.isCurrentSeason)
-  if (current?.id && !powerSeasonId.value) powerSeasonId.value = current.id
 }
 
 const applyMatchFilter = async () => {
@@ -1258,70 +1166,7 @@ onBeforeUnmount(() => {
             </template>
           </el-dialog>
 
-        <el-card shadow="hover" class="cup-history-card cup-history-section" v-loading="cupHistoryLoading">
-            <span class="section-kicker">CUP HISTORY</span>
-            <div class="card-title-row cup-title-row">
-              <div class="card-heading-stack">
-                <h3 class="cup-history-title">杯赛战绩</h3>
-                <p class="cup-history-subtitle">已结束杯赛中的参赛记录</p>
-              </div>
-              <span class="status-pill">Archive</span>
-            </div>
-
-            <template v-if="cupHistory?.summary?.seasonsPlayed">
-              <div class="cup-summary-grid">
-                <div class="cup-summary-item">
-                  <span class="cup-summary-value">{{ cupHistory.summary.seasonsPlayed }}</span>
-                  <span class="cup-summary-label">参赛届数</span>
-                </div>
-                <div class="cup-summary-item">
-                  <span class="cup-summary-value">{{ cupHistory.summary.championships }}</span>
-                  <span class="cup-summary-label">夺冠次数</span>
-                </div>
-                <div class="cup-summary-item">
-                  <span class="cup-summary-value">
-                    {{ cupHistory.summary.bestRank ? `#${cupHistory.summary.bestRank}` : '—' }}
-                  </span>
-                  <span class="cup-summary-label">最佳名次</span>
-                </div>
-                <div class="cup-summary-item">
-                  <span class="cup-summary-value">{{ cupHistory.summary.totalKills }}</span>
-                  <span class="cup-summary-label">累计击杀</span>
-                </div>
-              </div>
-
-              <div class="profile-table-scroll cup-table-scroll">
-                <el-table
-                  :data="cupHistory.seasons"
-                  size="small"
-                  class="cup-season-table"
-                  empty-text="暂无记录"
-                >
-                  <el-table-column label="杯赛" min-width="100" prop="title" show-overflow-tooltip />
-                  <el-table-column label="结束" width="80">
-                    <template #default="{ row }">{{ formatCupDate(row.finishedAt) }}</template>
-                  </el-table-column>
-                  <el-table-column label="队伍" min-width="88">
-                    <template #default="{ row }">
-                      #{{ String(row.teamNumber).padStart(2, '0') }} {{ row.teamName }}
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="名次" width="56" align="center">
-                    <template #default="{ row }">
-                      <span :class="{ 'cup-champion': row.isChampion }">
-                        {{ row.teamRank ? `#${row.teamRank}` : '—' }}
-                      </span>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="击杀" width="52" align="center" prop="totalKills" />
-                </el-table>
-              </div>
-            </template>
-
-            <p v-else class="cup-history-empty">暂无已结束的杯赛参赛记录</p>
-        </el-card>
-
-          <div class="pubg-content">
+        <div class="pubg-content">
           <el-card v-if="!isPubgBound && isOwnProfile" shadow="hover" class="pubg-card pubg-card-bind">
             <span class="section-kicker">PUBG ACCOUNT</span>
             <div class="card-heading-stack">
@@ -1410,17 +1255,6 @@ onBeforeUnmount(() => {
                 </div>
                 <span class="status-pill">Ranked</span>
               </div>
-              <div v-if="isOwnProfile && powerSeasonOptions.length" class="power-season-row">
-                <span class="power-season-label">赛季</span>
-                <el-select
-                  :model-value="powerSeasonId"
-                  placeholder="当前赛季"
-                  class="power-season-select"
-                  @change="handlePowerSeasonChange"
-                >
-                  <el-option v-for="opt in powerSeasonOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-                </el-select>
-              </div>
               <div class="power-hero" :class="`power-tone-${pubgPowerTone}`" v-loading="pubgPowerLoading">
                 <div class="power-hero-score">
                   <span class="power-score-label">战力值</span>
@@ -1477,7 +1311,12 @@ onBeforeUnmount(() => {
 
             <el-card shadow="hover" class="pubg-card pubg-card-clan" v-loading="clanLoading">
               <span class="section-kicker">CLAN</span>
-              <h3 class="pubg-card-title">战队</h3>
+              <div class="card-title-row">
+                <div class="card-heading-stack">
+                  <h3 class="pubg-card-title">战队</h3>
+                  <p class="card-subcopy">PUBG 官方战队信息</p>
+                </div>
+              </div>
               <template v-if="pubgClan">
                 <p class="clan-name">{{ pubgClan.clanName || pubgClan.name || '未命名战队' }}</p>
                 <p class="clan-tag" v-if="pubgClan.clanTag || pubgClan.tag">[{{ pubgClan.clanTag || pubgClan.tag }}]</p>
@@ -1739,6 +1578,70 @@ onBeforeUnmount(() => {
           </template>
         </div>
 
+        <el-card shadow="hover" class="cup-history-card cup-history-section" v-loading="cupHistoryLoading">
+            <span class="section-kicker">CUP HISTORY</span>
+            <div class="card-title-row cup-title-row">
+              <div class="card-heading-stack">
+                <h3 class="cup-history-title">杯赛战绩</h3>
+                <p class="cup-history-subtitle">已结束杯赛中的参赛记录</p>
+              </div>
+              <span class="status-pill">Archive</span>
+            </div>
+
+            <template v-if="cupHistory?.summary?.seasonsPlayed">
+              <div class="cup-summary-grid">
+                <div class="cup-summary-item">
+                  <span class="cup-summary-value">{{ cupHistory.summary.seasonsPlayed }}</span>
+                  <span class="cup-summary-label">参赛届数</span>
+                </div>
+                <div class="cup-summary-item">
+                  <span class="cup-summary-value">{{ cupHistory.summary.championships }}</span>
+                  <span class="cup-summary-label">夺冠次数</span>
+                </div>
+                <div class="cup-summary-item">
+                  <span class="cup-summary-value">
+                    {{ cupHistory.summary.bestRank ? `#${cupHistory.summary.bestRank}` : '—' }}
+                  </span>
+                  <span class="cup-summary-label">最佳名次</span>
+                </div>
+                <div class="cup-summary-item">
+                  <span class="cup-summary-value">{{ cupHistory.summary.totalKills }}</span>
+                  <span class="cup-summary-label">累计击杀</span>
+                </div>
+              </div>
+
+              <div class="profile-table-scroll cup-table-scroll">
+                <el-table
+                  :data="cupHistory.seasons"
+                  size="small"
+                  class="cup-season-table"
+                  empty-text="暂无记录"
+                >
+                  <el-table-column label="杯赛" min-width="100" prop="title" show-overflow-tooltip />
+                  <el-table-column label="结束" width="80">
+                    <template #default="{ row }">{{ formatCupDate(row.finishedAt) }}</template>
+                  </el-table-column>
+                  <el-table-column label="队伍" min-width="88">
+                    <template #default="{ row }">
+                      #{{ String(row.teamNumber).padStart(2, '0') }} {{ row.teamName }}
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="名次" width="56" align="center">
+                    <template #default="{ row }">
+                      <span :class="{ 'cup-champion': row.isChampion }">
+                        {{ row.teamRank ? `#${row.teamRank}` : '—' }}
+                      </span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="击杀" width="52" align="center" prop="totalKills" />
+                </el-table>
+              </div>
+            </template>
+
+            <p v-else class="cup-history-empty">暂无已结束的杯赛参赛记录</p>
+        </el-card>
+
+          
       </div>
     </div>
   </div>
@@ -3167,25 +3070,6 @@ onBeforeUnmount(() => {
   grid-template-columns: repeat(auto-fit, minmax(4.8rem, 1fr));
   gap: 0.55rem;
   margin-top: 0.85rem;
-}
-
-.power-season-row {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  margin: 0 0 0.85rem;
-}
-
-.power-season-label {
-  flex-shrink: 0;
-  font-size: 0.78rem;
-  color: #8a7c6c;
-  font-weight: 600;
-}
-
-.power-season-select {
-  flex: 1;
-  min-width: 0;
 }
 
 .power-rank-meta {
@@ -6697,3 +6581,147 @@ onBeforeUnmount(() => {
 }
 
 </style>
+
+/* —— 个人页布局优化：信息层级与桌面网格 —— */
+.profile-layout {
+  max-width: 1120px !important;
+  gap: 1rem !important;
+}
+
+.pubg-content {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr) !important;
+  grid-template-areas:
+    "bind bind"
+    "power clan"
+    "stats stats"
+    "mastery mastery"
+    "matches matches" !important;
+  gap: 0.9rem !important;
+  align-items: stretch;
+}
+
+.pubg-card-bind { grid-area: bind; }
+.pubg-card-power { grid-area: power; }
+.pubg-card-clan { grid-area: clan; }
+.pubg-card-stats { grid-area: stats; }
+.pubg-card-mastery { grid-area: mastery; }
+.pubg-card-matches { grid-area: matches; }
+
+.profile-info {
+  grid-template-columns: 200px minmax(0, 1fr) !important;
+  gap: 1.1rem !important;
+}
+
+.profile-info-avatar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.user-meta-list {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 0.4rem !important;
+}
+
+.user-meta-list p {
+  margin: 0 !important;
+  flex: 0 1 auto;
+}
+
+.pubg-card-power,
+.pubg-card-clan {
+  height: 100%;
+}
+
+.pubg-card-clan .clan-name {
+  margin: 0.35rem 0 0.25rem;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #1d1d1f;
+  line-height: 1.25;
+}
+
+.pubg-card-clan .clan-tag {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #6b6b73;
+  font-weight: 600;
+}
+
+.pubg-card-clan .clan-meta,
+.pubg-card-clan .clan-empty {
+  margin-top: 0.75rem;
+  color: #8e8e93;
+  font-size: 0.82rem;
+}
+
+.pubg-card-clan .clan-empty {
+  padding: 1.2rem 0.2rem;
+  text-align: center;
+  border: 1px dashed #e5e5ea;
+  background: #fafafd;
+}
+
+.power-metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+}
+
+.power-rank-meta {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+}
+
+.weapon-mastery-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 0.55rem;
+}
+
+.survival-mastery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid #ececf1;
+  background: #fafafd;
+}
+
+@media (max-width: 960px) {
+  .pubg-content {
+    grid-template-columns: 1fr !important;
+    grid-template-areas:
+      "bind"
+      "power"
+      "clan"
+      "stats"
+      "mastery"
+      "matches" !important;
+  }
+
+  .power-metrics,
+  .power-rank-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .profile-info {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .profile-layout {
+    gap: 0.75rem !important;
+  }
+
+  .user-details {
+    text-align: left !important;
+  }
+
+  .user-meta-list,
+  .user-actions {
+    justify-content: flex-start !important;
+  }
+}

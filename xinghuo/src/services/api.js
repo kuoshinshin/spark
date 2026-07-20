@@ -539,11 +539,10 @@ export const userApi = {
     return request('/user/pubg/seasons');
   },
 
-  // PUBG 星火战力
-  getPubgPower: async (force = false, season = '') => {
+  // PUBG 星火战力（始终当前赛季）
+  getPubgPower: async (force = false) => {
     const qs = toQueryString({
       force: force ? '1' : undefined,
-      season: season || undefined,
     });
     return request(`/user/pubg/power${qs ? `?${qs}` : ''}`);
   },

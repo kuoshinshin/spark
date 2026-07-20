@@ -835,60 +835,42 @@ class UserController {
     try {
       const userId = req.user.id;
       const forceRefresh = ['1', 'true', 'yes'].includes(String(req.query?.force || '').toLowerCase());
-      const requestedSeason = String(req.query?.season || '').trim();
       const user = await UserModel.findById(userId);
       const binding = UserController.normalizePubgBinding(user);
       if (!binding.playerId || !binding.platform) {
         return res.status(400).json({ error: '当前账号尚未绑定 PUBG' });
       }
 
-      let currentSeasonId = '';
-      try {
-        const seasons = await getSeasons(binding.platform);
-        currentSeasonId = seasons.find((item) => item?.isCurrentSeason)?.id || '';
-      } catch (_) {
-        currentSeasonId = '';
-      }
-
-      const isCurrentSeason = !requestedSeason || !currentSeasonId || requestedSeason === currentSeasonId;
-      const seasonForFetch = isCurrentSeason ? '' : requestedSeason;
-      const cacheKeyExtra = isCurrentSeason ? '' : requestedSeason;
-
+      // 星火战力只取当前赛季，忽略历史 season 参数（避免错缓存/错同步）
       const fetchPower = async () => {
-        const fresh = await getCompetitivePowerScore(binding.platform, binding.playerId, seasonForFetch);
-        if (isCurrentSeason) {
-          await UserModel.savePubgPowerCache(userId, fresh);
-        }
+        const fresh = await getCompetitivePowerScore(binding.platform, binding.playerId, '');
+        await UserModel.savePubgPowerCache(userId, fresh);
         return fresh;
       };
 
       const power = forceRefresh
         ? await (async () => {
             const fresh = await fetchPower();
-            if (isCurrentSeason) {
-              await getOrRefresh({
-                userId,
-                cacheKey: UserController.buildPubgCacheKey(binding, 'power', cacheKeyExtra),
-                ttlMs: 0,
-                fetcher: async () => fresh,
-                allowStaleOnError: false,
-              });
-            }
+            await getOrRefresh({
+              userId,
+              cacheKey: UserController.buildPubgCacheKey(binding, 'power'),
+              ttlMs: 0,
+              fetcher: async () => fresh,
+              allowStaleOnError: false,
+            });
             return fresh;
           })()
         : await getOrRefresh({
             userId,
-            cacheKey: UserController.buildPubgCacheKey(binding, 'power', cacheKeyExtra),
+            cacheKey: UserController.buildPubgCacheKey(binding, 'power'),
             ttlMs: PUBG_CACHE_TTL_POWER_MS,
             fetcher: fetchPower,
           });
 
-      if (isCurrentSeason) {
-        try {
-          await EventModel.syncUserSparkScore(userId, power?.score);
-        } catch (syncError) {
-          console.warn('同步报名星火战力失败:', syncError?.message || syncError);
-        }
+      try {
+        await EventModel.syncUserSparkScore(userId, power?.score);
+      } catch (syncError) {
+        console.warn('同步报名星火战力失败:', syncError?.message || syncError);
       }
       return res.json(power);
     } catch (error) {
