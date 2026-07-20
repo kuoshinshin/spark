@@ -129,29 +129,53 @@ kill_port_holders() {
 log "释放端口前监听者："
 list_port_holders
 
-# 两边 PM2 都删掉，避免 root/ubuntu 双实例
+# 只清理当前用户的 PM2 应用；避免无密码 sudo 卡死 / 误杀后起不来
 pm2 delete xinghuo-api >/dev/null 2>&1 || true
-sudo pm2 delete xinghuo-api >/dev/null 2>&1 || true
-kill_port_holders
-sleep 1
 
-log "释放端口后监听者："
-list_port_holders
+if [[ "${FORCE_KILL_PORT:-}" == "1" ]]; then
+  log "FORCE_KILL_PORT=1：尝试结束占用 ${PORT_NUM} 的进程"
+  if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    sudo pm2 delete xinghuo-api >/dev/null 2>&1 || true
+  fi
+  kill_port_holders
+  sleep 1
+  log "释放端口后监听者："
+  list_port_holders
+fi
 
-# 强制按本仓库 ecosystem 重建进程
-pm2 start deploy/ecosystem.config.cjs --only xinghuo-api
-pm2 save
+start_api() {
+  pm2 start deploy/ecosystem.config.cjs --only xinghuo-api
+  pm2 save
+}
+
+start_api
 pm2 describe xinghuo-api | sed -n '1,40p' || true
 
 # 确认新路由已挂载（未带 token 必须是 401；000/404 一律失败）
 log "冒烟检查后端新接口 …"
-sleep 2
+sleep 3
 health_body="$(curl -fsS --max-time 8 "http://127.0.0.1:${PORT_NUM}/health" 2>/dev/null || true)"
 log "health body: ${health_body:-<empty>}"
+
+# 若起不来且尚未强杀端口，自动再试一次（处理「旧幽灵进程占端口」）
+if [[ -z "$health_body" && "${FORCE_KILL_PORT:-}" != "1" ]]; then
+  log "health 为空，自动 FORCE_KILL_PORT 重试一次 …"
+  if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    sudo pm2 delete xinghuo-api >/dev/null 2>&1 || true
+  fi
+  pm2 delete xinghuo-api >/dev/null 2>&1 || true
+  kill_port_holders
+  sleep 1
+  start_api
+  sleep 3
+  health_body="$(curl -fsS --max-time 8 "http://127.0.0.1:${PORT_NUM}/health" 2>/dev/null || true)"
+  log "重试后 health body: ${health_body:-<empty>}"
+fi
+
 if ! printf '%s' "$health_body" | grep -q '"pubgClan":true'; then
   log "错误：health 缺少 routes.pubgClan（仍是旧进程，或未监听 ${PORT_NUM}）"
   list_port_holders
-  pm2 logs xinghuo-api --lines 40 --nostream || true
+  pm2 logs xinghuo-api --lines 80 --nostream || true
   exit 1
 fi
 
@@ -160,9 +184,9 @@ code_clan="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "http://127.0.
 code_mastery="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "http://127.0.0.1:${PORT_NUM}/api/user/pubg/mastery" || true)"
 log "路由探测 HTTP: public=${code_public} clan=${code_clan} mastery=${code_mastery}（必须全部为 401）"
 if [[ "$code_public" != "401" || "$code_clan" != "401" || "$code_mastery" != "401" ]]; then
-  log "错误：新接口未就绪。请检查是否 root/ubuntu 双 PM2，或 Nginx upstream 端口不是 ${PORT_NUM}。"
+  log "错误：新接口未就绪。若确认是双 PM2 抢端口，可：FORCE_KILL_PORT=1 bash deploy/aliyun-ecs.sh"
   list_port_holders
-  pm2 logs xinghuo-api --lines 40 --nostream || true
+  pm2 logs xinghuo-api --lines 80 --nostream || true
   exit 1
 fi
 
