@@ -10,9 +10,7 @@
     "migrate-invite-codes": "node scripts/add_invite_codes_table.js",
     "seed:test-users": "node scripts/seed_test_users.js",
     "seed:event-history-demo": "node scripts/seed_event_history_demo.js",
-    "invite:apply-env": "node scripts/apply_env_invite_code.js",
-    "test:bean": "node scripts/test_bean_rule_engine.js",
-    "test": "npm run test:bean"
+    "invite:apply-env": "node scripts/apply_env_invite_code.js"
   },
   "keywords": [
     "pubg",

@@ -22,9 +22,6 @@ const rawEnv = {
   TRUST_PROXY_HOPS: process.env.TRUST_PROXY_HOPS,
   INIT_DEFAULT_INVITE_CODE: process.env.INIT_DEFAULT_INVITE_CODE,
   PUBG_API_KEY: process.env.PUBG_API_KEY,
-  BEAN_POLL_ENABLED: process.env.BEAN_POLL_ENABLED,
-  BEAN_POLL_INTERVAL_MS: process.env.BEAN_POLL_INTERVAL_MS,
-  BEAN_MATCH_LOOKBACK_MS: process.env.BEAN_MATCH_LOOKBACK_MS,
 }
 
 const productionEnv = Object.fromEntries(

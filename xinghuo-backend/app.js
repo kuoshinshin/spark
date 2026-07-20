@@ -620,164 +620,6 @@ async function startServer() {
         CONSTRAINT fk_round_member_results_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS bean_tables (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        table_name VARCHAR(64) NOT NULL,
-        owner_user_id INT NULL,
-        status ENUM('waiting', 'playing', 'settling') NOT NULL DEFAULT 'waiting',
-        seat_count INT NOT NULL DEFAULT 4,
-        soft_locked TINYINT(1) NOT NULL DEFAULT 0,
-        current_session_id INT NULL,
-        is_archived TINYINT(1) NOT NULL DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        KEY idx_bean_tables_status (status),
-        KEY idx_bean_tables_owner (owner_user_id),
-        CONSTRAINT fk_bean_tables_owner FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
-    try {
-      await connection.execute('ALTER TABLE bean_tables MODIFY COLUMN owner_user_id INT NULL');
-    } catch (e) {
-      console.warn('[warn] 调整 bean_tables.owner_user_id 为可空失败:', e?.message || e);
-    }
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS bean_sessions (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        table_id INT NOT NULL,
-        status ENUM('started', 'matching', 'matched', 'preview', 'settled', 'failed') NOT NULL DEFAULT 'started',
-        started_by INT NOT NULL,
-        started_at DATETIME NOT NULL,
-        settled_at DATETIME NULL,
-        resolved_match_id VARCHAR(128) NULL,
-        random_seed BIGINT NULL,
-        summary_json JSON NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        KEY idx_bean_sessions_table (table_id),
-        KEY idx_bean_sessions_status (status),
-        CONSTRAINT fk_bean_sessions_table FOREIGN KEY (table_id) REFERENCES bean_tables(id) ON DELETE CASCADE,
-        CONSTRAINT fk_bean_sessions_started_by FOREIGN KEY (started_by) REFERENCES users(id) ON DELETE RESTRICT
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
-    await ensureColumn(
-      'bean_tables',
-      'current_session_id',
-      'ALTER TABLE bean_tables ADD COLUMN current_session_id INT NULL AFTER soft_locked'
-    );
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS bean_table_players (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        table_id INT NOT NULL,
-        user_id INT NOT NULL,
-        seat_no INT NOT NULL,
-        player_role ENUM('owner', 'player') NOT NULL DEFAULT 'player',
-        is_active TINYINT(1) NOT NULL DEFAULT 1,
-        is_substitute TINYINT(1) NOT NULL DEFAULT 0,
-        replaced_user_id INT NULL,
-        joined_at DATETIME NULL,
-        left_at DATETIME NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        KEY idx_bean_table_players_table (table_id),
-        KEY idx_bean_table_players_user (user_id),
-        KEY idx_bean_table_players_active (table_id, is_active),
-        CONSTRAINT fk_bean_table_players_table FOREIGN KEY (table_id) REFERENCES bean_tables(id) ON DELETE CASCADE,
-        CONSTRAINT fk_bean_table_players_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-        CONSTRAINT fk_bean_table_players_replaced_user FOREIGN KEY (replaced_user_id) REFERENCES users(id) ON DELETE SET NULL
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
-    await ensureIndex(
-      'bean_table_players',
-      'uniq_bean_table_active_seat',
-      'CREATE UNIQUE INDEX uniq_bean_table_active_seat ON bean_table_players(table_id, seat_no, is_active)'
-    );
-    await ensureIndex(
-      'bean_table_players',
-      'uniq_bean_table_active_user',
-      'CREATE UNIQUE INDEX uniq_bean_table_active_user ON bean_table_players(table_id, user_id, is_active)'
-    );
-    await connection.execute(`
-      UPDATE bean_tables t
-      SET t.owner_user_id = NULL
-      WHERE t.table_name REGEXP '^豆子桌-[0-9]{2}$'
-        AND t.status = 'waiting'
-        AND NOT EXISTS (
-          SELECT 1
-          FROM bean_table_players p
-          WHERE p.table_id = t.id AND p.is_active = 1
-        )
-    `);
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS bean_session_players (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        session_id INT NOT NULL,
-        user_id INT NOT NULL,
-        seat_no INT NOT NULL,
-        display_name VARCHAR(100) NULL,
-        pubg_platform VARCHAR(20) NULL,
-        pubg_player_id VARCHAR(64) NULL,
-        pubg_player_name VARCHAR(64) NULL,
-        damage DOUBLE NULL,
-        kills INT NULL,
-        win_place INT NULL,
-        tail INT NULL,
-        team_no TINYINT NULL,
-        net_beans INT NULL,
-        source_confidence DOUBLE NULL DEFAULT 0,
-        manual_override TINYINT(1) NOT NULL DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        UNIQUE KEY uniq_bean_session_user (session_id, user_id),
-        UNIQUE KEY uniq_bean_session_seat (session_id, seat_no),
-        KEY idx_bean_session_players_session (session_id),
-        CONSTRAINT fk_bean_session_players_session FOREIGN KEY (session_id) REFERENCES bean_sessions(id) ON DELETE CASCADE,
-        CONSTRAINT fk_bean_session_players_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS bean_settlement_logs (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        session_id INT NOT NULL,
-        action VARCHAR(64) NOT NULL,
-        operator_user_id INT NULL,
-        detail_json JSON NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        KEY idx_bean_logs_session (session_id),
-        CONSTRAINT fk_bean_logs_session FOREIGN KEY (session_id) REFERENCES bean_sessions(id) ON DELETE CASCADE,
-        CONSTRAINT fk_bean_logs_operator FOREIGN KEY (operator_user_id) REFERENCES users(id) ON DELETE SET NULL
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
-    await ensureColumn(
-      'bean_sessions',
-      'last_polled_at',
-      'ALTER TABLE bean_sessions ADD COLUMN last_polled_at DATETIME NULL AFTER summary_json'
-    );
-    await ensureColumn(
-      'bean_sessions',
-      'round_count',
-      'ALTER TABLE bean_sessions ADD COLUMN round_count INT NOT NULL DEFAULT 0 AFTER last_polled_at'
-    );
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS bean_session_rounds (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        session_id INT NOT NULL,
-        round_no INT NOT NULL,
-        match_id VARCHAR(128) NOT NULL,
-        match_created_at DATETIME NULL,
-        game_mode VARCHAR(32) NULL,
-        match_type VARCHAR(32) NULL,
-        map_name VARCHAR(64) NULL,
-        summary_json JSON NOT NULL,
-        players_json JSON NOT NULL,
-        source ENUM('auto', 'manual') NOT NULL DEFAULT 'auto',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE KEY uniq_session_match (session_id, match_id),
-        KEY idx_session_rounds_session (session_id),
-        CONSTRAINT fk_bean_session_rounds_session FOREIGN KEY (session_id) REFERENCES bean_sessions(id) ON DELETE CASCADE
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
     const ensureInviteCodes = require('./config/ensureInviteCodes');
     await ensureInviteCodes(connection);
     connection.release();
@@ -795,7 +637,6 @@ async function startServer() {
   const shareRoutes = require('./routes/share');
   const inviteCodeRoutes = require('./routes/inviteCodes');
   const notificationRoutes = require('./routes/notification');
-  const beanLobbyRoutes = require('./routes/beanLobby');
 
   app.use('/api/auth', authRoutes);
   app.use('/api/invite-codes', inviteCodeRoutes);
@@ -803,7 +644,6 @@ async function startServer() {
   app.use('/api/chat', chatRoutes);
   app.use('/api/carousel', carouselRoutes);
   app.use('/api/events', eventRoutes);
-  app.use('/api/bean-lobby', beanLobbyRoutes);
   app.use('/api/share', shareRoutes);
   app.use('/api/notifications', notificationRoutes);
 
@@ -821,12 +661,6 @@ async function startServer() {
     if (!isProd) {
       console.log(`本地访问: http://localhost:${PORT}`);
       console.log(`健康检查: http://localhost:${PORT}/health`);
-    }
-    try {
-      const { startBeanPollScheduler } = require('./services/beanPollService');
-      startBeanPollScheduler();
-    } catch (error) {
-      console.warn('[warn] 豆子局轮询调度启动失败:', error?.message || error);
     }
   });
 }

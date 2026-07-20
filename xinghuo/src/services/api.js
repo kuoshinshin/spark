@@ -378,45 +378,6 @@ export const eventApi = {
   },
 };
 
-// 豆子局大厅 API
-export const beanApi = {
-  listTables: async () => request('/bean-lobby/tables', { skipCache: true }),
-  createTable: async (payload) => request('/bean-lobby/tables', {
-    method: 'POST',
-    body: JSON.stringify(payload || {}),
-  }),
-  getTable: async (tableId) => request(`/bean-lobby/tables/${tableId}`, { skipCache: true }),
-  joinTable: async (tableId, payload) => request(`/bean-lobby/tables/${tableId}/join`, {
-    method: 'POST',
-    body: JSON.stringify(payload || {}),
-  }),
-  leaveTable: async (tableId) => request(`/bean-lobby/tables/${tableId}/leave`, { method: 'POST' }),
-  startSession: async (tableId) => request(`/bean-lobby/tables/${tableId}/start`, { method: 'POST' }),
-  substitute: async (tableId, payload) => request(`/bean-lobby/tables/${tableId}/substitute`, {
-    method: 'POST',
-    body: JSON.stringify(payload || {}),
-  }),
-  transferOwner: async (tableId, targetUserId) => request(`/bean-lobby/tables/${tableId}/transfer-owner`, {
-    method: 'POST',
-    body: JSON.stringify({ targetUserId }),
-  }),
-  getSession: async (sessionId) => request(`/bean-lobby/sessions/${sessionId}`, { skipCache: true }),
-  refreshAuto: async (sessionId, payload) => request(`/bean-lobby/sessions/${sessionId}/refresh-auto`, {
-    method: 'POST',
-    body: JSON.stringify(payload || {}),
-  }),
-  pollSession: async (sessionId) => request(`/bean-lobby/sessions/${sessionId}/poll`, {
-    method: 'POST',
-    body: JSON.stringify({}),
-  }),
-  updateManualPlayers: async (sessionId, players, roundId) => request(`/bean-lobby/sessions/${sessionId}/players`, {
-    method: 'PUT',
-    body: JSON.stringify({ players, roundId }),
-  }),
-  confirm: async (sessionId) => request(`/bean-lobby/sessions/${sessionId}/confirm`, { method: 'POST' }),
-  reopen: async (sessionId) => request(`/bean-lobby/sessions/${sessionId}/reopen`, { method: 'POST' }),
-};
-
 // 用户相关 API
 export const userApi = {
   // 获取用户信息
