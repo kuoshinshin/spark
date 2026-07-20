@@ -90,6 +90,27 @@ else
 fi
 pm2 save
 
+# 确认新路由已挂载（避免前端已更新、后端仍是旧进程）
+log "冒烟检查后端新接口 …"
+PORT_NUM="$(node -e "require('dotenv').config({path:'$BACKEND_DIR/.env'}); process.stdout.write(String(process.env.PORT||3000))" 2>/dev/null || echo 3000)"
+if curl -fsS --max-time 8 "http://127.0.0.1:${PORT_NUM}/health" >/dev/null 2>&1; then
+  log "health ok (port ${PORT_NUM})"
+else
+  log "警告：health 检查失败，请手动 pm2 logs xinghuo-api"
+fi
+# 未带 token 时期望 401，而非 404「接口不存在」
+code_public="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "http://127.0.0.1:${PORT_NUM}/api/user/public/1" || true)"
+code_clan="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "http://127.0.0.1:${PORT_NUM}/api/user/pubg/clan" || true)"
+code_mastery="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "http://127.0.0.1:${PORT_NUM}/api/user/pubg/mastery" || true)"
+log "路由探测 HTTP: public=${code_public} clan=${code_clan} mastery=${code_mastery}（期望 401，若为 404 说明后端未加载新路由）"
+if [[ "$code_public" == "404" || "$code_clan" == "404" || "$code_mastery" == "404" ]]; then
+  log "警告：新接口仍 404，尝试 pm2 restart …"
+  pm2 restart xinghuo-api || true
+  sleep 2
+  code_public="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "http://127.0.0.1:${PORT_NUM}/api/user/public/1" || true)"
+  log "restart 后 public=${code_public}"
+fi
+
 reload_nginx_if_present
 
 if command -v nginx >/dev/null 2>&1; then

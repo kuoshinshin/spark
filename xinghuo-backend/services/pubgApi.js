@@ -820,18 +820,50 @@ async function getWeaponMastery(platform, playerId) {
     const summaries = data?.data?.attributes?.weaponSummaries || {};
     const weapons = Object.entries(summaries).map(([id, summary]) => {
       const official = summary?.OfficialStatsTotal || {};
+      const competitive = summary?.CompetitiveStatsTotal || {};
       const legacy = summary?.StatsTotal || {};
-      const level = Number(official.LevelCurrent ?? summary?.LevelCurrent ?? 0);
-      const xp = Number(
-        official.XPTotal
-        ?? official.LevelXPTotal
-        ?? summary?.XPTotal
-        ?? 0
-      );
-      const kills = Number(official.Kills ?? legacy.Kills ?? 0);
-      const damage = Number(official.DamagePlayer ?? legacy.DamagePlayer ?? 0);
-      const headshots = Number(official.HeadShots ?? legacy.HeadShots ?? 0);
-      const hasOfficial = official.LevelCurrent != null || official.Kills != null;
+      const pick = (...vals) => {
+        for (const v of vals) {
+          if (v != null && v !== '') return v;
+        }
+        return 0;
+      };
+      const level = Number(pick(
+        summary?.LevelCurrent,
+        official.LevelCurrent,
+        competitive.LevelCurrent,
+        0
+      ));
+      const xp = Number(pick(
+        summary?.XPTotal,
+        official.XPTotal,
+        official.LevelXPTotal,
+        competitive.XPTotal,
+        0
+      ));
+      const kills = Number(pick(
+        official.Kills,
+        competitive.Kills,
+        legacy.Kills,
+        official.Defeats,
+        competitive.Defeats,
+        legacy.Defeats,
+        0
+      ));
+      const damage = Number(pick(
+        official.DamagePlayer,
+        competitive.DamagePlayer,
+        legacy.DamagePlayer,
+        0
+      ));
+      const headshots = Number(pick(
+        official.HeadShots,
+        competitive.HeadShots,
+        legacy.HeadShots,
+        0
+      ));
+      const hasOfficial = official.Kills != null || official.Defeats != null || official.LevelCurrent != null;
+      const hasCompetitive = competitive.Kills != null || competitive.Defeats != null;
       return {
         id,
         name: formatWeaponName(id),
@@ -840,9 +872,9 @@ async function getWeaponMastery(platform, playerId) {
         kills,
         damage,
         headshots,
-        statsType: hasOfficial ? 'official' : 'legacy',
+        statsType: hasOfficial ? 'official' : (hasCompetitive ? 'competitive' : 'legacy'),
       };
-    });
+    }).filter((w) => w.level > 0 || w.kills > 0 || w.damage > 0);
 
     weapons.sort((a, b) => {
       if (b.level !== a.level) return b.level - a.level;
@@ -865,11 +897,12 @@ async function getSurvivalMastery(platform, playerId) {
   try {
     const data = await requestPubg(`/${platform}/players/${playerId}/survival_mastery`);
     const attrs = data?.data?.attributes || {};
+    const tier = attrs.tier ?? attrs.Tier ?? attrs.survivalTier ?? null;
     return {
       level: Number(attrs.level ?? attrs.Level ?? 0),
-      tier: attrs.tier ?? attrs.Tier ?? null,
-      xp: Number(attrs.xp ?? attrs.XP ?? 0),
-      totalMatchesPlayed: Number(attrs.totalMatchesPlayed ?? 0),
+      tier: typeof tier === 'object' ? formatTier(tier) : tier,
+      xp: Number(attrs.xp ?? attrs.XP ?? attrs.totalXp ?? 0),
+      totalMatchesPlayed: Number(attrs.totalMatchesPlayed ?? attrs.matchesPlayed ?? 0),
       totalAirDropsLooted: Number(attrs.totalAirDropsLooted ?? 0),
       totalDamageDealt: Number(attrs.totalDamageDealt ?? 0),
       totalHeals: Number(attrs.totalHeals ?? 0),
@@ -886,22 +919,29 @@ async function getPlayerClan(platform, playerId) {
   try {
     const player = await getPlayerWithRelationships(platform, playerId);
     if (!player) return null;
-    const clanId = player.attributes?.clanId
+    const attrs = player.attributes || {};
+    const rawClanId = attrs.clanId
+      || attrs.ClanId
+      || attrs.clanID
+      || attrs.ClanID
       || player.relationships?.clan?.data?.id
       || null;
-    if (!clanId) return null;
+    const clanId = rawClanId != null ? String(rawClanId).trim() : '';
+    if (!clanId || clanId === '0' || clanId.toLowerCase() === 'null') return null;
 
-    const data = await requestPubg(`/${platform}/clans/${clanId}`);
+    const data = await requestPubg(`/${platform}/clans/${encodeURIComponent(clanId)}`);
     const clan = data?.data || {};
-    const attrs = clan.attributes || {};
+    const clanAttrs = clan.attributes || {};
+    const name = clanAttrs.clanName || clanAttrs.name || clanAttrs.ClanName || '';
+    const tag = clanAttrs.clanTag || clanAttrs.tag || clanAttrs.ClanTag || '';
     return {
       id: clan.id || clanId,
-      name: attrs.clanName || attrs.name || '',
-      tag: attrs.clanTag || attrs.tag || '',
-      clanName: attrs.clanName || attrs.name || '',
-      clanTag: attrs.clanTag || attrs.tag || '',
-      level: Number(attrs.clanLevel ?? attrs.level ?? 0),
-      memberCount: Number(attrs.memberCount ?? 0),
+      name,
+      tag,
+      clanName: name,
+      clanTag: tag,
+      level: Number(clanAttrs.clanLevel ?? clanAttrs.level ?? 0),
+      memberCount: Number(clanAttrs.memberCount ?? clanAttrs.membersCount ?? 0),
     };
   } catch (error) {
     if (Number(error?.statusCode || 0) === 404) return null;

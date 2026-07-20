@@ -394,7 +394,7 @@ export const userApi = {
 
   /** 查看其他选手公开主页 */
   getPublicProfile: async (userId) => {
-    return request(`/user/${userId}/public`, { skipCache: true });
+    return request(`/user/public/${userId}`, { skipCache: true });
   },
   
   // 获取用户统计信息（Profile.vue 使用）

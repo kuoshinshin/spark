@@ -18,9 +18,6 @@ const handleAvatarUpload = (req, res, next) => {
 // 获取用户信息（需要认证）
 router.get('/info', verifyToken, verifyUser, UserController.getUserInfo);
 
-// 查看其他选手公开主页（需登录；不含电话/地址）
-router.get('/:id/public', verifyToken, verifyUser, UserController.getPublicProfile);
-
 // 上传头像（multipart，字段名 avatar）
 router.post('/avatar', verifyToken, verifyUser, handleAvatarUpload, UserController.uploadAvatar);
 
@@ -72,6 +69,11 @@ router.get('/pubg/clan', verifyToken, verifyUser, UserController.getPubgClan);
 
 // PUBG 单场详情（需要认证）
 router.get('/pubg/matches/:matchId', verifyToken, verifyUser, UserController.getPubgMatchDetail);
+
+// 查看其他选手公开主页（放在参数路由之前，避免被误匹配）
+router.get('/public/:id', verifyToken, verifyUser, UserController.getPublicProfile);
+// 兼容旧路径
+router.get('/:id/public', verifyToken, verifyUser, UserController.getPublicProfile);
 
 // 获取所有用户（需要管理员权限）
 router.get('/all', verifyToken, verifyAdmin, UserController.getAllUsers);
