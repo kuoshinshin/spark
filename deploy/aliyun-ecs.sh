@@ -83,16 +83,33 @@ fi
 
 log "启动 / 重载 PM2 …"
 cd "$ROOT"
-if pm2 describe xinghuo-api >/dev/null 2>&1; then
-  pm2 reload deploy/ecosystem.config.cjs --only xinghuo-api
-else
-  pm2 start deploy/ecosystem.config.cjs --only xinghuo-api
+
+# 核对磁盘上的路由文件是否已包含新接口（避免拉错目录 / 未更新）
+if ! grep -q "public/:id" "$BACKEND_DIR/routes/user.js" \
+  || ! grep -q "pubg/clan" "$BACKEND_DIR/routes/user.js" \
+  || ! grep -q "pubg/mastery" "$BACKEND_DIR/routes/user.js"; then
+  log "错误：$BACKEND_DIR/routes/user.js 缺少 public/clan/mastery 路由，请确认 DEPLOY_PATH 与 git 版本。"
+  exit 1
 fi
+log "路由文件校验通过: $BACKEND_DIR/routes/user.js"
+
+# 查出占用 PORT 的进程，避免 root/ubuntu 两套 PM2 抢端口导致「重启了仍是旧进程」
+PORT_NUM="$(node -e "require('dotenv').config({path:'$BACKEND_DIR/.env'}); process.stdout.write(String(process.env.PORT||3000))" 2>/dev/null || echo 3000)"
+if command -v ss >/dev/null 2>&1; then
+  log "当前监听 ${PORT_NUM} 的进程："
+  ss -lntp "sport = :${PORT_NUM}" 2>/dev/null || true
+elif command -v lsof >/dev/null 2>&1; then
+  lsof -iTCP:"${PORT_NUM}" -sTCP:LISTEN 2>/dev/null || true
+fi
+
+# 强制按本仓库 ecosystem 重建进程（reload 不会纠正错误的 cwd/script）
+pm2 delete xinghuo-api >/dev/null 2>&1 || true
+pm2 start deploy/ecosystem.config.cjs --only xinghuo-api
 pm2 save
 
 # 确认新路由已挂载（避免前端已更新、后端仍是旧进程）
 log "冒烟检查后端新接口 …"
-PORT_NUM="$(node -e "require('dotenv').config({path:'$BACKEND_DIR/.env'}); process.stdout.write(String(process.env.PORT||3000))" 2>/dev/null || echo 3000)"
+sleep 2
 if curl -fsS --max-time 8 "http://127.0.0.1:${PORT_NUM}/health" >/dev/null 2>&1; then
   log "health ok (port ${PORT_NUM})"
 else
@@ -104,11 +121,10 @@ code_clan="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "http://127.0.
 code_mastery="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "http://127.0.0.1:${PORT_NUM}/api/user/pubg/mastery" || true)"
 log "路由探测 HTTP: public=${code_public} clan=${code_clan} mastery=${code_mastery}（期望 401，若为 404 说明后端未加载新路由）"
 if [[ "$code_public" == "404" || "$code_clan" == "404" || "$code_mastery" == "404" ]]; then
-  log "警告：新接口仍 404，尝试 pm2 restart …"
-  pm2 restart xinghuo-api || true
-  sleep 2
-  code_public="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "http://127.0.0.1:${PORT_NUM}/api/user/public/1" || true)"
-  log "restart 后 public=${code_public}"
+  log "错误：新接口仍 404。常见原因：root 与 ubuntu 各跑一套 PM2，3000 端口被旧进程占用。"
+  log "请执行: sudo ss -lntp 'sport = :${PORT_NUM}' ; sudo pm2 list ; pm2 list"
+  log "然后杀掉占用端口的旧 node，再在正确用户下: cd $ROOT && pm2 start deploy/ecosystem.config.cjs --only xinghuo-api"
+  exit 1
 fi
 
 reload_nginx_if_present
