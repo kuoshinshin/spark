@@ -1195,6 +1195,16 @@ class EventModel {
         sampleLimited: Boolean(data?.sampleLimited),
         formulaVersion: data?.formulaVersion || null,
         seasonId: data?.seasonId || null,
+        confidence: data?.confidence != null ? Number(data.confidence) : null,
+        currentTier: data?.currentTier || null,
+        bestTier: data?.bestTier || null,
+        currentRankPoint: data?.currentRankPoint ?? null,
+        bestRankPoint: data?.bestRankPoint ?? null,
+        kda: data?.kda != null ? Number(data.kda) : null,
+        top10Ratio: data?.top10Ratio != null ? Number(data.top10Ratio) : null,
+        winRatio: data?.winRatio != null ? Number(data.winRatio) : null,
+        assists: Number(data?.assists || 0),
+        dBNOs: Number(data?.dBNOs || 0),
       };
     } catch {
       return null;

@@ -18,6 +18,9 @@ const handleAvatarUpload = (req, res, next) => {
 // 获取用户信息（需要认证）
 router.get('/info', verifyToken, verifyUser, UserController.getUserInfo);
 
+// 查看其他选手公开主页（需登录；不含电话/地址）
+router.get('/:id/public', verifyToken, verifyUser, UserController.getPublicProfile);
+
 // 上传头像（multipart，字段名 avatar）
 router.post('/avatar', verifyToken, verifyUser, handleAvatarUpload, UserController.uploadAvatar);
 
@@ -60,6 +63,12 @@ router.get('/pubg/power', verifyToken, verifyUser, UserController.getPubgPower);
 
 // 星火战力排行榜（需要认证）
 router.get('/pubg/power-leaderboard', verifyToken, verifyUser, UserController.getPowerLeaderboard);
+
+// PUBG 武器/生存精通（需要认证）
+router.get('/pubg/mastery', verifyToken, verifyUser, UserController.getPubgMastery);
+
+// PUBG 战队（需要认证）
+router.get('/pubg/clan', verifyToken, verifyUser, UserController.getPubgClan);
 
 // PUBG 单场详情（需要认证）
 router.get('/pubg/matches/:matchId', verifyToken, verifyUser, UserController.getPubgMatchDetail);

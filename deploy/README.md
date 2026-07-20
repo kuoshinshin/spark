@@ -108,54 +108,86 @@ cd /opt/spark && bash deploy/aliyun-ecs.sh
 
 ## 六、香港机房 · 大陆访问优化
 
-腾讯云香港轻量对大陆无「回国专线」保证，无法做到与备案大陆机房同等稳定，但可按下面步骤减轻弱网影响。
+腾讯云香港轻量对大陆**没有回国专线保证**。软件调优只能减轻弱网影响；要明显改善晚高峰路由，需要 **云加速产品** 或 **备案后迁大陆机房**。
 
 ### 1. DNS（阿里云解析）
 
-- `@`、`www` 使用 **A 记录** 直连服务器 IP（`101.32.221.4`），**不要** 走 Cloudflare 橙云代理。
-- TTL 设为 **10 分钟**，便于以后换 IP。
-- 暂不要用 URL 转发、境内 CDN（未备案域名通常无法完整使用）。
+- `@`、`www` 使用 **A 记录** 直连服务器 IP（`101.32.221.4`），**不要** 走 Cloudflare 橙云代理（跨境更不稳定）。
+- TTL 设为 **10 分钟**，便于换 IP 或接入加速。
+- 未备案域名通常无法完整使用境内 CDN；勿指望「随便套个国内 CDN」解决跨境。
 
-### 2. 服务器网络调优（BBR）
+### 2. 服务器网络调优（BBR + 弱网参数）
 
 ```bash
 cd /opt/spark
 sudo bash deploy/hk-mainland-tune.sh
+bash deploy/hk-mainland-check.sh
 ```
 
 ### 3. Nginx 压缩与静态缓存
 
-在 `/etc/nginx/conf.d/spark.conf` 的 **443 server** 块内（`server_name sparksquad.club` 那段）加入：
+在 `/etc/nginx/conf.d/spark.conf` 的 **443 server** 块内加入：
 
 ```nginx
 include /opt/spark/deploy/nginx-hk-tuning.conf;
 ```
 
-若已有 `location /api/`、`location /uploads/`，请**删除重复块**，只保留 tuning 文件里的一份，或把 tuning 文件中的 location 合并进现有配置。
+若已有 `location /api/`、`location /uploads/`、`location /`，请**删除重复块**，只保留 tuning 文件里的一份。
 
-**头像 / 圈子图片 404 或 FAILED 排查**（上传成功但页面不显示）：
+`upstream xinghuo_backend` 建议保留 `keepalive 32`（见 `nginx-xinghuo.conf.example`）。
 
-1. **`location ^~ /api/` 必须存在**（注意 `^~`）。若只有 `location /api/`，会被同文件里 `~* \.(jpg|png|...)$` 抢走 `/api/uploads/*.png`，nginx 在前端 dist 里找文件而 404。
-2. **`location ^~ /uploads/`** 同样必须带 `^~`（兼容旧链接）。
-3. 前端图片地址已改为 **`/api/media?path=avatars/xxx.png`**（路径不以 `.png` 结尾，可绕过静态正则）。
-4. 后端对 `/api/media` 已排除全局限流（否则约 100 张图后全部 429）。
+**头像 / 圈子图片 404：**
 
-`deploy/aliyun-ecs.sh` 部署结束时会检测是否配置了 `location ^~ /api/` 并尝试 `nginx -t` + reload。
-
-若需手动重载：
+1. **`location ^~ /api/` 必须存在**（注意 `^~`）。
+2. **`location ^~ /uploads/`** 同样带 `^~`。
+3. 前端图片走 **`/api/media?path=...`**。
+4. 后端对 `/api/media` 已排除全局限流。
 
 ```bash
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-### 4. 前端
+### 4. 真正「优化回国路线」（可选，需花钱）
 
-- 构建产物已拆分 `element-plus` / `vue` 等 chunk，减轻首屏体积。
-- `sw.js` 会缓存 `/assets/` 等静态文件，二次打开更快。
+仅靠本仓库脚本**不能**把公网跨境变成专线。可选：
 
-更新代码后照常 `bash deploy/aliyun-ecs.sh` 即可。
+| 方案 | 效果 | 说明 |
+|------|------|------|
+| **腾讯云 GAAP / 全球应用加速** | 较好 | 大陆入口 IP → 加速到香港源站；控制台创建通道后把域名 A 记录改到加速 IP |
+| **阿里云 GA 等竞品** | 较好 | 若 DNS/账号在阿里云，按产品文档接入香港源站 |
+| **ICP 备案 + 大陆机房** | 最好（长期） | 用户主要在大陆时的正解；香港机可作备用 |
 
-### 5. 用户侧建议
+接入加速后：
 
-- 联通/移动用户通常比电信晚高峰更稳定；可提示用户换网络或避开 20:00–23:00。
-- 长期要以大陆用户为主且要求稳定，仍需 **ICP 备案 + 大陆机房**。
+1. 安全组放行加速回源 IP / 端口（按产品文档）。  
+2. 源站 Nginx 仍用本仓库 tuning；证书可继续挂源站或挂加速侧。  
+3. 用大陆电信/联通/移动各测一次首页 TTFB 与圈子图片。
+
+### 5. 前端
+
+- 构建产物已拆分 `element-plus` / `vue` 等 chunk。  
+- `sw.js` 缓存 `/assets/`，二次打开更快。
+
+更新代码后：`bash deploy/aliyun-ecs.sh`。
+
+### 6. 用户侧预期
+
+- 联通/移动往往比电信晚高峰更稳；20:00–23:00 跨境公网抖动属常见。  
+- 调优后仍卡顿 → 优先评估 GAAP/加速，而不是继续拧 sysctl。
+
+---
+
+## 七、发版前优化自检
+
+本地可先跑：`node scripts/ci-check.mjs`（前端 build + 后端语法检查）。
+
+1. `xinghuo`：`npm run build` 通过  
+2. 后端：`pm2 status` 中 `xinghuo-api` 为 online，`curl` 本机 `/health` 正常  
+3. `.env` 含有效 `PUBG_API_KEY`；同步战绩后个人页战力/段位有数据  
+4. 圈子评论连点只产生一条；无短时重复入库  
+5. 头像/圈子图经 `/api/media` 可显示；Nginx 含 `location ^~ /api/`  
+6. 战力榜点击他人行进入对方主页（非自己）  
+7. 历史赛季切换战力不覆盖当前赛季排行榜缓存  
+8. 部署后浏览器强刷一次，确认前端已是新 hash 资源  
+
+Agent 巡检：对话中说「优化巡检」即可按 `.cursor/skills/optimize-pass` 跑一轮。

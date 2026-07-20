@@ -124,16 +124,20 @@ async function getLifetimeStats(platform, playerId) {
   };
 
   const normalOverview = aggregateOverview(modeEntries);
+  const normalBreakdown = buildModeBreakdown(gameModeStats, 'normal');
 
   const currentSeason = Array.isArray(seasons)
     ? seasons.find((item) => item?.isCurrentSeason)
     : null;
   let rankedOverview = { roundsPlayed: 0, wins: 0, kills: 0, kdRatio: 0, winRate: 0 };
+  let rankedGameModeStats = {};
+  let rankedDetails = null;
   if (currentSeason?.id) {
     try {
       const rankedData = await getPlayerRankedSeason(platform, playerId, currentSeason.id);
-      const rankedGameModeStats = rankedData?.attributes?.rankedGameModeStats || {};
+      rankedGameModeStats = rankedData?.attributes?.rankedGameModeStats || {};
       rankedOverview = aggregateOverview(Object.entries(rankedGameModeStats));
+      rankedDetails = extractSquadRankedDetails(rankedGameModeStats);
     } catch (error) {
       if (Number(error?.statusCode || 0) !== 404) throw error;
     }
@@ -147,7 +151,12 @@ async function getLifetimeStats(platform, playerId) {
     kdRatio: normalOverview.kdRatio,
     winRate: normalOverview.winRate,
     normalOverview,
-    rankedOverview
+    rankedOverview,
+    modeBreakdown: {
+      normal: normalBreakdown,
+      ranked: buildModeBreakdown(rankedGameModeStats, 'ranked'),
+    },
+    rankedDetails,
   };
 }
 
@@ -373,6 +382,253 @@ function isSquadRankedModeKey(key) {
   return mode === 'squad' || mode === 'squad-fpp';
 }
 
+function formatTier(tier) {
+  if (!tier) return null;
+  const t = tier.tier || '';
+  const s = tier.subTier || '';
+  return { tier: t, subTier: s, label: [t, s].filter(Boolean).join(' ') };
+}
+
+function formatWeaponName(key) {
+  return String(key || '')
+    .replace(/^Item_Weapon_/, '')
+    .replace(/_C$/, '');
+}
+
+function summarizeModeStats(stats, kind = 'normal') {
+  if (!stats) return null;
+  const roundsPlayed = Number(stats.roundsPlayed || 0);
+  const wins = Number(stats.wins || 0);
+  const kills = Number(stats.kills || 0);
+  const deaths = Number(stats.deaths || 0);
+  const losses = Number(stats.losses || 0);
+  const assists = Number(stats.assists || 0);
+  const damageDealt = Number(stats.damageDealt || 0);
+  const top10s = Number(stats.top10s || 0);
+  const dBNOs = Number(stats.dBNOs || 0);
+
+  let kd;
+  if (kind === 'ranked') {
+    kd = deaths > 0 ? Number((kills / deaths).toFixed(2)) : Number(kills.toFixed(2));
+  } else {
+    const normalizedLosses = losses > 0 ? losses : Math.max(roundsPlayed - wins, 0);
+    kd = normalizedLosses > 0
+      ? Number((kills / normalizedLosses).toFixed(2))
+      : Number(kills.toFixed(2));
+  }
+
+  const winRate = roundsPlayed > 0 ? Number(((wins / roundsPlayed) * 100).toFixed(2)) : 0;
+  const top10Ratio = stats.top10Ratio != null
+    ? Number(Number(stats.top10Ratio).toFixed(4))
+    : (roundsPlayed > 0 ? Number((top10s / roundsPlayed).toFixed(4)) : 0);
+  const winRatio = stats.winRatio != null
+    ? Number(Number(stats.winRatio).toFixed(4))
+    : (roundsPlayed > 0 ? Number((wins / roundsPlayed).toFixed(4)) : 0);
+  const avgRank = Number(Number(stats.avgRank || 0).toFixed(1));
+  const avgDamage = roundsPlayed > 0 ? Number((damageDealt / roundsPlayed).toFixed(1)) : 0;
+  const kda = deaths > 0
+    ? Number(((kills + assists) / deaths).toFixed(2))
+    : Number((kills + assists).toFixed(2));
+
+  const result = {
+    roundsPlayed,
+    wins,
+    kills,
+    deaths,
+    assists,
+    dBNOs,
+    damageDealt,
+    kd,
+    winRate,
+    top10Ratio,
+    winRatio,
+    avgRank,
+    avgDamage,
+  };
+
+  if (kind === 'ranked') {
+    result.kda = kda;
+    if (stats.currentRankPoint != null) result.currentRankPoint = Number(stats.currentRankPoint);
+    if (stats.bestRankPoint != null) result.bestRankPoint = Number(stats.bestRankPoint);
+    if (stats.currentTier) result.currentTier = formatTier(stats.currentTier);
+    if (stats.bestTier) result.bestTier = formatTier(stats.bestTier);
+  }
+
+  return result;
+}
+
+function buildModeBreakdown(gameModeStats, kind = 'normal') {
+  const stats = gameModeStats || {};
+  const groups = {
+    solo: ['solo', 'solo-fpp'],
+    duo: ['duo', 'duo-fpp'],
+    squad: ['squad', 'squad-fpp'],
+  };
+
+  const mergeEntries = (keys) => {
+    const entries = keys.map((key) => stats[key]).filter(Boolean);
+    if (!entries.length) return null;
+
+    const merged = {
+      roundsPlayed: 0,
+      wins: 0,
+      kills: 0,
+      deaths: 0,
+      losses: 0,
+      assists: 0,
+      damageDealt: 0,
+      top10s: 0,
+      dBNOs: 0,
+      rankWeightedSum: 0,
+      top10RatioSum: 0,
+      winRatioSum: 0,
+      ratioWeight: 0,
+      currentRankPoint: null,
+      bestRankPoint: null,
+      currentTier: null,
+      bestTier: null,
+    };
+
+    entries.forEach((s) => {
+      const rounds = Number(s.roundsPlayed || 0);
+      merged.roundsPlayed += rounds;
+      merged.wins += Number(s.wins || 0);
+      merged.kills += Number(s.kills || 0);
+      merged.deaths += Number(s.deaths || 0);
+      merged.losses += Number(s.losses || 0);
+      merged.assists += Number(s.assists || 0);
+      merged.damageDealt += Number(s.damageDealt || 0);
+      merged.top10s += Number(s.top10s || 0);
+      merged.dBNOs += Number(s.dBNOs || 0);
+      if (rounds > 0) {
+        merged.rankWeightedSum += Number(s.avgRank || 0) * rounds;
+        const entryTop10 = s.top10Ratio != null ? Number(s.top10Ratio) : (Number(s.top10s || 0) / rounds);
+        const entryWin = s.winRatio != null ? Number(s.winRatio) : (Number(s.wins || 0) / rounds);
+        merged.top10RatioSum += entryTop10 * rounds;
+        merged.winRatioSum += entryWin * rounds;
+        merged.ratioWeight += rounds;
+      }
+      if (kind === 'ranked') {
+        const brp = Number(s.bestRankPoint || 0);
+        if (merged.bestRankPoint == null || brp > merged.bestRankPoint) {
+          merged.bestRankPoint = brp;
+          if (s.bestTier) merged.bestTier = s.bestTier;
+        }
+        const crp = Number(s.currentRankPoint || 0);
+        if (merged.currentRankPoint == null || crp >= merged.currentRankPoint) {
+          merged.currentRankPoint = crp;
+          if (s.currentTier) merged.currentTier = s.currentTier;
+        }
+      }
+    });
+
+    const synthesized = {
+      roundsPlayed: merged.roundsPlayed,
+      wins: merged.wins,
+      kills: merged.kills,
+      deaths: merged.deaths,
+      losses: merged.losses,
+      assists: merged.assists,
+      damageDealt: merged.damageDealt,
+      top10s: merged.top10s,
+      dBNOs: merged.dBNOs,
+      avgRank: merged.roundsPlayed > 0 ? merged.rankWeightedSum / merged.roundsPlayed : 0,
+      top10Ratio: merged.ratioWeight > 0 ? merged.top10RatioSum / merged.ratioWeight : 0,
+      winRatio: merged.ratioWeight > 0 ? merged.winRatioSum / merged.ratioWeight : 0,
+    };
+    if (kind === 'ranked') {
+      synthesized.currentRankPoint = merged.currentRankPoint;
+      synthesized.bestRankPoint = merged.bestRankPoint;
+      synthesized.currentTier = merged.currentTier;
+      synthesized.bestTier = merged.bestTier;
+    }
+    return summarizeModeStats(synthesized, kind);
+  };
+
+  return {
+    solo: mergeEntries(groups.solo),
+    duo: mergeEntries(groups.duo),
+    squad: mergeEntries(groups.squad),
+    all: mergeEntries([...groups.solo, ...groups.duo, ...groups.squad]),
+  };
+}
+
+function extractSquadRankedDetails(rankedGameModeStats = {}) {
+  const entries = Object.entries(rankedGameModeStats || {}).filter(
+    ([key, stats]) => isSquadRankedModeKey(key) && stats
+  );
+  if (!entries.length) return null;
+
+  let roundsPlayed = 0;
+  let kills = 0;
+  let deaths = 0;
+  let damageDealt = 0;
+  let rankWeightedSum = 0;
+  let assists = 0;
+  let dBNOs = 0;
+  let wins = 0;
+  let top10s = 0;
+  let bestRankPoint = 0;
+  let bestTier = null;
+  let currentRankPoint = -1;
+  let currentTier = null;
+
+  entries.forEach(([, stats]) => {
+    const rounds = Number(stats?.roundsPlayed || 0);
+    if (rounds > 0) {
+      roundsPlayed += rounds;
+      kills += Number(stats?.kills || 0);
+      deaths += Number(stats?.deaths || 0);
+      damageDealt += Number(stats?.damageDealt || 0);
+      rankWeightedSum += Number(stats?.avgRank || 0) * rounds;
+      assists += Number(stats?.assists || 0);
+      dBNOs += Number(stats?.dBNOs || 0);
+      wins += Number(stats?.wins || 0);
+      top10s += Number(stats?.top10s || 0);
+    }
+
+    const brp = Number(stats?.bestRankPoint || 0);
+    if (brp >= bestRankPoint) {
+      bestRankPoint = brp;
+      if (stats?.bestTier) bestTier = stats.bestTier;
+    }
+    const crp = Number(stats?.currentRankPoint || 0);
+    if (crp >= currentRankPoint) {
+      currentRankPoint = crp;
+      if (stats?.currentTier) currentTier = stats.currentTier;
+    }
+  });
+
+  if (roundsPlayed <= 0 && currentRankPoint < 0 && bestRankPoint <= 0) return null;
+
+  const kd = deaths > 0 ? kills / deaths : kills;
+  const kda = deaths > 0 ? (kills + assists) / deaths : (kills + assists);
+  const avgDamage = roundsPlayed > 0 ? damageDealt / roundsPlayed : 0;
+  const avgRank = roundsPlayed > 0 ? rankWeightedSum / roundsPlayed : 0;
+  const top10Ratio = roundsPlayed > 0 ? top10s / roundsPlayed : 0;
+  const winRatio = roundsPlayed > 0 ? wins / roundsPlayed : 0;
+
+  return {
+    roundsPlayed,
+    kd: Number(kd.toFixed(2)),
+    avgDamage: Number(avgDamage.toFixed(1)),
+    avgRank: Number(avgRank.toFixed(1)),
+    kills,
+    deaths,
+    assists,
+    dBNOs,
+    wins,
+    damageDealt,
+    currentTier: formatTier(currentTier),
+    bestTier: formatTier(bestTier),
+    currentRankPoint: currentRankPoint >= 0 ? currentRankPoint : 0,
+    bestRankPoint,
+    kda: Number(kda.toFixed(2)),
+    top10Ratio: Number(top10Ratio.toFixed(4)),
+    winRatio: Number(winRatio.toFixed(4)),
+  };
+}
+
 function calculatePowerLevel(score) {
   if (score >= 720) return '魔王S';
   if (score >= 620) return 'S';
@@ -487,28 +743,45 @@ function aggregateRankedSeasonStats(rankedGameModeStats = {}) {
   };
 }
 
-async function getCompetitivePowerScore(platform, playerId) {
+async function getCompetitivePowerScore(platform, playerId, seasonId = '') {
   let seasons = [];
   try {
     seasons = await getSeasons(platform);
   } catch (_) {
-    return buildEmptyPowerScore();
+    return buildEmptyPowerScore(seasonId || '');
   }
 
   const currentSeason = seasons.find((item) => item?.isCurrentSeason);
-  const seasonId = currentSeason?.id || '';
-  if (!seasonId) return buildEmptyPowerScore();
+  const resolvedSeasonId = String(seasonId || '').trim() || currentSeason?.id || '';
+  if (!resolvedSeasonId) return buildEmptyPowerScore();
 
   let rankedData = null;
   try {
-    rankedData = await getPlayerRankedSeason(platform, playerId, seasonId);
+    rankedData = await getPlayerRankedSeason(platform, playerId, resolvedSeasonId);
   } catch (error) {
-    if (Number(error?.statusCode || 0) === 404) return buildEmptyPowerScore(seasonId);
+    if (Number(error?.statusCode || 0) === 404) return buildEmptyPowerScore(resolvedSeasonId);
     throw error;
   }
 
-  const aggregated = aggregateSquadRankedSeasonStats(rankedData?.attributes?.rankedGameModeStats || {});
-  if (!aggregated) return buildEmptyPowerScore(seasonId);
+  const rankedGameModeStats = rankedData?.attributes?.rankedGameModeStats || {};
+  const rankedDetails = extractSquadRankedDetails(rankedGameModeStats);
+  const aggregated = aggregateSquadRankedSeasonStats(rankedGameModeStats);
+  if (!aggregated) {
+    const empty = buildEmptyPowerScore(resolvedSeasonId);
+    return {
+      ...empty,
+      rankedDetails,
+      currentTier: rankedDetails?.currentTier || null,
+      bestTier: rankedDetails?.bestTier || null,
+      currentRankPoint: rankedDetails?.currentRankPoint ?? null,
+      bestRankPoint: rankedDetails?.bestRankPoint ?? null,
+      kda: rankedDetails?.kda ?? null,
+      top10Ratio: rankedDetails?.top10Ratio ?? null,
+      winRatio: rankedDetails?.winRatio ?? null,
+      assists: rankedDetails?.assists ?? 0,
+      dBNOs: rankedDetails?.dBNOs ?? 0,
+    };
+  }
 
   const computed = computePowerScoreV2(aggregated);
 
@@ -519,7 +792,7 @@ async function getCompetitivePowerScore(platform, playerId) {
     avgDamage: Number(aggregated.avgDamage.toFixed(1)),
     avgRank: Number(aggregated.avgRank.toFixed(1)),
     matchesAnalyzed: aggregated.roundsPlayed,
-    seasonId,
+    seasonId: resolvedSeasonId,
     formulaVersion: 'v2',
     baseScore: computed.baseScore,
     confidence: computed.confidence,
@@ -528,7 +801,112 @@ async function getCompetitivePowerScore(platform, playerId) {
       kdFactor: computed.kdFactor,
       damageFactor: computed.damageFactor,
     },
+    rankedDetails,
+    currentTier: rankedDetails?.currentTier || null,
+    bestTier: rankedDetails?.bestTier || null,
+    currentRankPoint: rankedDetails?.currentRankPoint ?? null,
+    bestRankPoint: rankedDetails?.bestRankPoint ?? null,
+    kda: rankedDetails?.kda ?? null,
+    top10Ratio: rankedDetails?.top10Ratio ?? null,
+    winRatio: rankedDetails?.winRatio ?? null,
+    assists: rankedDetails?.assists ?? 0,
+    dBNOs: rankedDetails?.dBNOs ?? 0,
   };
+}
+
+async function getWeaponMastery(platform, playerId) {
+  try {
+    const data = await requestPubg(`/${platform}/players/${playerId}/weapon_mastery`);
+    const summaries = data?.data?.attributes?.weaponSummaries || {};
+    const weapons = Object.entries(summaries).map(([id, summary]) => {
+      const official = summary?.OfficialStatsTotal || {};
+      const legacy = summary?.StatsTotal || {};
+      const level = Number(official.LevelCurrent ?? summary?.LevelCurrent ?? 0);
+      const xp = Number(
+        official.XPTotal
+        ?? official.LevelXPTotal
+        ?? summary?.XPTotal
+        ?? 0
+      );
+      const kills = Number(official.Kills ?? legacy.Kills ?? 0);
+      const damage = Number(official.DamagePlayer ?? legacy.DamagePlayer ?? 0);
+      const headshots = Number(official.HeadShots ?? legacy.HeadShots ?? 0);
+      const hasOfficial = official.LevelCurrent != null || official.Kills != null;
+      return {
+        id,
+        name: formatWeaponName(id),
+        level,
+        xp,
+        kills,
+        damage,
+        headshots,
+        statsType: hasOfficial ? 'official' : 'legacy',
+      };
+    });
+
+    weapons.sort((a, b) => {
+      if (b.level !== a.level) return b.level - a.level;
+      return b.kills - a.kills;
+    });
+
+    return {
+      weapons: weapons.slice(0, 8),
+      total: weapons.length,
+    };
+  } catch (error) {
+    if (Number(error?.statusCode || 0) === 404) {
+      return { weapons: [], total: 0 };
+    }
+    throw error;
+  }
+}
+
+async function getSurvivalMastery(platform, playerId) {
+  try {
+    const data = await requestPubg(`/${platform}/players/${playerId}/survival_mastery`);
+    const attrs = data?.data?.attributes || {};
+    return {
+      level: Number(attrs.level ?? attrs.Level ?? 0),
+      tier: attrs.tier ?? attrs.Tier ?? null,
+      xp: Number(attrs.xp ?? attrs.XP ?? 0),
+      totalMatchesPlayed: Number(attrs.totalMatchesPlayed ?? 0),
+      totalAirDropsLooted: Number(attrs.totalAirDropsLooted ?? 0),
+      totalDamageDealt: Number(attrs.totalDamageDealt ?? 0),
+      totalHeals: Number(attrs.totalHeals ?? 0),
+      totalKills: Number(attrs.totalKills ?? 0),
+      totalDistanceTraveled: Number(attrs.totalDistanceTraveled ?? 0),
+    };
+  } catch (error) {
+    if (Number(error?.statusCode || 0) === 404) return null;
+    throw error;
+  }
+}
+
+async function getPlayerClan(platform, playerId) {
+  try {
+    const player = await getPlayerWithRelationships(platform, playerId);
+    if (!player) return null;
+    const clanId = player.attributes?.clanId
+      || player.relationships?.clan?.data?.id
+      || null;
+    if (!clanId) return null;
+
+    const data = await requestPubg(`/${platform}/clans/${clanId}`);
+    const clan = data?.data || {};
+    const attrs = clan.attributes || {};
+    return {
+      id: clan.id || clanId,
+      name: attrs.clanName || attrs.name || '',
+      tag: attrs.clanTag || attrs.tag || '',
+      clanName: attrs.clanName || attrs.name || '',
+      clanTag: attrs.clanTag || attrs.tag || '',
+      level: Number(attrs.clanLevel ?? attrs.level ?? 0),
+      memberCount: Number(attrs.memberCount ?? 0),
+    };
+  } catch (error) {
+    if (Number(error?.statusCode || 0) === 404) return null;
+    throw error;
+  }
 }
 
 module.exports = {
@@ -537,6 +915,9 @@ module.exports = {
   getRecentMatches,
   getMatchesBySeason,
   getCompetitivePowerScore,
+  getWeaponMastery,
+  getSurvivalMastery,
+  getPlayerClan,
   getMatchById,
   getSeasons,
   getPlayerSeason,
@@ -544,4 +925,8 @@ module.exports = {
   parsePlayerStatsFromMatch,
   parseMatchDetailWithTeam,
   matchGameMode,
+  formatTier,
+  summarizeModeStats,
+  buildModeBreakdown,
+  extractSquadRankedDetails,
 };

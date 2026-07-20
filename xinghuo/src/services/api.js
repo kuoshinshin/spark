@@ -391,6 +391,11 @@ export const userApi = {
     // 实际 API 调用
     return request('/user/info');
   },
+
+  /** 查看其他选手公开主页 */
+  getPublicProfile: async (userId) => {
+    return request(`/user/${userId}/public`, { skipCache: true });
+  },
   
   // 获取用户统计信息（Profile.vue 使用）
   getStats: async () => {
@@ -493,7 +498,9 @@ export const userApi = {
       '/user/pubg/overview',
       '/user/pubg/power',
       '/user/pubg/seasons',
-      '/user/pubg/matches'
+      '/user/pubg/matches',
+      '/user/pubg/mastery',
+      '/user/pubg/clan'
     ]);
     return data;
   },
@@ -509,7 +516,9 @@ export const userApi = {
       '/user/pubg/overview',
       '/user/pubg/power',
       '/user/pubg/seasons',
-      '/user/pubg/matches'
+      '/user/pubg/matches',
+      '/user/pubg/mastery',
+      '/user/pubg/clan'
     ]);
     return data;
   },
@@ -531,14 +540,27 @@ export const userApi = {
   },
 
   // PUBG 星火战力
-  getPubgPower: async (force = false) => {
-    const qs = force ? '?force=1' : '';
-    return request(`/user/pubg/power${qs}`);
+  getPubgPower: async (force = false, season = '') => {
+    const qs = toQueryString({
+      force: force ? '1' : undefined,
+      season: season || undefined,
+    });
+    return request(`/user/pubg/power${qs ? `?${qs}` : ''}`);
   },
 
   getPowerLeaderboard: async (params = {}) => {
     const qs = toQueryString(params);
     return request(`/user/pubg/power-leaderboard${qs ? `?${qs}` : ''}`);
+  },
+
+  // PUBG 武器/生存精通
+  getPubgMastery: async () => {
+    return request('/user/pubg/mastery');
+  },
+
+  // PUBG 战队
+  getPubgClan: async () => {
+    return request('/user/pubg/clan');
   },
 
   // PUBG 单场详情

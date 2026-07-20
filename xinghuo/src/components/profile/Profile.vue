@@ -1,10 +1,14 @@
 <script setup>
-import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { userApi } from '../../services/api'
 import { DEFAULT_AVATAR, normalizeAvatar, avatarDisplayUrl, handleAvatarImgError, clearFailedAvatar } from '../../utils/avatar'
 import { POWER_SCORE_V2 } from '../../utils/sparkLevel'
 import { useAuthStore } from '../../stores/auth'
+
+const route = useRoute()
+const auth = useAuthStore()
 
 // 用户数据
 const userData = ref(null)
@@ -12,6 +16,18 @@ const userData = ref(null)
 // 加载状态
 const isLoading = ref(true)
 const errorMessage = ref('')
+
+const viewingUserId = computed(() => {
+  const raw = route.query.userId
+  if (raw == null || raw === '') return null
+  const id = Number(raw)
+  return Number.isFinite(id) && id > 0 ? id : null
+})
+
+const isOwnProfile = computed(() => {
+  if (viewingUserId.value == null) return true
+  return Number(auth.userData?.id) === viewingUserId.value
+})
 
 const isEditing = ref(false)
 const editedUserData = ref(null)
@@ -22,6 +38,11 @@ const pubgBindingForm = ref({
 const pubgStats = ref(null)
 const pubgPower = ref(null)
 const pubgPowerLoading = ref(false)
+const pubgMastery = ref(null)
+const pubgClan = ref(null)
+const masteryLoading = ref(false)
+const clanLoading = ref(false)
+const powerSeasonId = ref('')
 const pubgLoading = ref(false)
 const isRefreshingStats = ref(false)
 const isRebinding = ref(false)
@@ -112,6 +133,30 @@ const pubgPowerSeasonLabel = computed(() => {
   const tail = id.split('.').pop()
   return tail || id
 })
+const rankedDetailsView = computed(() =>
+  pubgPower.value?.rankedDetails
+  || pubgStats.value?.rankedDetails
+  || null
+)
+const currentModeBreakdown = computed(() => {
+  const key = overviewType.value === 'ranked' ? 'ranked' : 'normal'
+  return pubgStats.value?.modeBreakdown?.[key] || null
+})
+const powerSeasonOptions = computed(() =>
+  (seasonOptions.value || []).filter((item) => !String(item.value || '').includes('lifetime'))
+)
+const formatPct = (v) => {
+  if (v == null || Number.isNaN(Number(v))) return '--'
+  const n = Number(v)
+  // top10Ratio/winRatio from API may be 0-1 or already percent
+  const pct = n <= 1 ? n * 100 : n
+  return `${pct.toFixed(1)}%`
+}
+const formatTierLabel = (tier) => {
+  if (!tier) return '暂无段位'
+  if (typeof tier === 'string') return tier
+  return tier.label || [tier.tier, tier.subTier].filter(Boolean).join(' ') || '暂无段位'
+}
 const pubgVisual = computed(() => {
   const stats = currentOverviewStats.value
   if (!stats) return null
@@ -327,6 +372,7 @@ const formatCupDate = (value) => {
 }
 
 const fetchCupHistory = async () => {
+  if (!isOwnProfile.value) return
   cupHistoryLoading.value = true
   try {
     cupHistory.value = await userApi.getCupHistory()
@@ -341,11 +387,69 @@ const fetchCupHistory = async () => {
   }
 }
 
+const applyOwnUserPayload = (data, statsData) => {
+  userData.value = {
+    ...data,
+    avatar: normalizeAvatar(data.avatar),
+    pubgBinding: data.pubgBinding || {
+      playerName: '',
+      platform: '',
+      playerId: '',
+      boundAt: null
+    }
+  }
+  pubgBindingForm.value = {
+    playerName: userData.value.pubgBinding.playerName || '',
+    platform: userData.value.pubgBinding.platform || 'steam'
+  }
+  pubgStats.value = statsData?.pubgStats || null
+  animatePubgNumbers(pubgVisual.value)
+  editedUserData.value = { ...userData.value }
+}
+
+const applyPublicUserPayload = (payload) => {
+  const data = payload?.user || {}
+  userData.value = {
+    id: data.id,
+    username: data.username,
+    avatar: normalizeAvatar(data.avatar),
+    role: data.role,
+    real_name: data.real_name || '',
+    created_at: data.created_at,
+    pubgBinding: payload?.pubgBinding || {
+      playerName: '',
+      platform: '',
+      playerId: '',
+      boundAt: null
+    }
+  }
+  pubgStats.value = payload?.pubgStats || null
+  pubgPower.value = payload?.pubgPower || null
+  pubgMastery.value = payload?.pubgMastery || null
+  pubgClan.value = payload?.pubgClan || null
+  cupHistory.value = payload?.cupHistory || {
+    summary: { seasonsPlayed: 0, championships: 0, bestRank: null, totalKills: 0 },
+    seasons: [],
+  }
+  pubgMatches.value = []
+  pubgMatchesTotal.value = 0
+  seasonOptions.value = []
+  animatePubgNumbers(pubgVisual.value)
+  editedUserData.value = null
+  isEditing.value = false
+}
+
 // 获取用户信息
 const fetchUserData = async () => {
   isLoading.value = true
   errorMessage.value = ''
   try {
+    if (!isOwnProfile.value) {
+      const payload = await userApi.getPublicProfile(viewingUserId.value)
+      applyPublicUserPayload(payload)
+      return
+    }
+
     const [data, statsData] = await Promise.all([
       userApi.getCurrentUser(),
       userApi.getStats().catch(() => null)
@@ -353,32 +457,23 @@ const fetchUserData = async () => {
     
     // 确保 data 是一个对象
     if (typeof data === 'object' && data !== null) {
-      // 设置用户数据
-      userData.value = {
-        ...data,
-        avatar: normalizeAvatar(data.avatar),
-        pubgBinding: data.pubgBinding || {
-          playerName: '',
-          platform: '',
-          playerId: '',
-          boundAt: null
-        }
-      }
-      pubgBindingForm.value = {
-        playerName: userData.value.pubgBinding.playerName || '',
-        platform: userData.value.pubgBinding.platform || 'steam'
-      }
-      pubgStats.value = statsData?.pubgStats || null
-      animatePubgNumbers(pubgVisual.value)
-      editedUserData.value = { ...userData.value }
+      applyOwnUserPayload(data, statsData)
 
       // 首屏优先渲染：慢接口改为后台加载，避免页面长时间卡在 loading
       if (userData.value.pubgBinding?.playerId) {
         Promise.allSettled([
           fetchPubgPower(),
           fetchPubgSeasons(),
-          fetchPubgMatches()
+          fetchPubgMatches(),
+          fetchPubgMastery(),
+          fetchPubgClan()
         ])
+      } else {
+        pubgPower.value = null
+        pubgMastery.value = null
+        pubgClan.value = null
+        pubgMatches.value = []
+        pubgMatchesTotal.value = 0
       }
     } else {
       errorMessage.value = '获取用户信息失败: 响应格式错误'
@@ -459,7 +554,9 @@ const handleBindPubg = async () => {
     await Promise.allSettled([
       fetchPubgPower(),
       fetchPubgSeasons(),
-      fetchPubgMatches()
+      fetchPubgMatches(),
+      fetchPubgMastery(),
+      fetchPubgClan()
     ])
     isRebinding.value = false
     ElMessage.success('PUBG 账号绑定成功')
@@ -477,6 +574,9 @@ const handleUnbindPubg = async () => {
     userData.value.pubgBinding = response.pubgBinding
     pubgStats.value = null
     pubgPower.value = null
+    pubgMastery.value = null
+    pubgClan.value = null
+    powerSeasonId.value = ''
     animatePubgNumbers(null)
     pubgMatches.value = []
     pubgMatchesTotal.value = 0
@@ -510,6 +610,8 @@ const handleRefreshPubgStats = async () => {
     await fetchPubgPower()
     await fetchPubgSeasons()
     await fetchPubgMatches()
+    await fetchPubgMastery()
+    await fetchPubgClan()
     ElMessage.success('战绩同步完成')
   } catch (error) {
     ElMessage.error(error.message || '同步战绩失败')
@@ -519,7 +621,8 @@ const handleRefreshPubgStats = async () => {
 }
 
 const fetchPubgOverview = async () => {
-  if (!isPubgBound.value) {
+  if (!isOwnProfile.value || !isPubgBound.value) {
+    if (!isOwnProfile.value) return
     pubgStats.value = null
     animatePubgNumbers(null)
     return
@@ -529,14 +632,57 @@ const fetchPubgOverview = async () => {
   animatePubgNumbers(pubgVisual.value)
 }
 const fetchPubgPower = async () => {
-  if (!isPubgBound.value) {
+  if (!isOwnProfile.value || !isPubgBound.value) {
+    if (!isOwnProfile.value) return
     pubgPower.value = null
     return
   }
   pubgPowerLoading.value = true
   try {
-    const data = await userApi.getPubgPower()
+    const data = await userApi.getPubgPower(false, powerSeasonId.value)
     pubgPower.value = data || null
+  } finally {
+    pubgPowerLoading.value = false
+  }
+}
+const fetchPubgMastery = async () => {
+  if (!isPubgBound.value) {
+    pubgMastery.value = null
+    return
+  }
+  masteryLoading.value = true
+  try {
+    pubgMastery.value = await userApi.getPubgMastery()
+  } catch (e) {
+    console.warn(e)
+    pubgMastery.value = null
+  } finally {
+    masteryLoading.value = false
+  }
+}
+const fetchPubgClan = async () => {
+  if (!isPubgBound.value) {
+    pubgClan.value = null
+    return
+  }
+  clanLoading.value = true
+  try {
+    const data = await userApi.getPubgClan()
+    pubgClan.value = data?.clan || null
+  } catch (e) {
+    pubgClan.value = null
+  } finally {
+    clanLoading.value = false
+  }
+}
+const handlePowerSeasonChange = async (seasonId) => {
+  powerSeasonId.value = seasonId || ''
+  if (!isOwnProfile.value) return
+  pubgPowerLoading.value = true
+  try {
+    pubgPower.value = await userApi.getPubgPower(false, powerSeasonId.value)
+  } catch (e) {
+    ElMessage.error(e.message || '加载赛季战力失败')
   } finally {
     pubgPowerLoading.value = false
   }
@@ -547,7 +693,8 @@ const handleOverviewTypeChange = (type) => {
 }
 
 const fetchPubgMatches = async () => {
-  if (!isPubgBound.value) {
+  if (!isOwnProfile.value || !isPubgBound.value) {
+    if (!isOwnProfile.value) return
     pubgMatches.value = []
     pubgMatchesTotal.value = 0
     return
@@ -564,7 +711,8 @@ const fetchPubgMatches = async () => {
 }
 
 const fetchPubgSeasons = async () => {
-  if (!isPubgBound.value) {
+  if (!isOwnProfile.value || !isPubgBound.value) {
+    if (!isOwnProfile.value) return
     seasonOptions.value = []
     return
   }
@@ -586,6 +734,9 @@ const fetchPubgSeasons = async () => {
       label: `${item.label}（${item.value}）`
     }
   })
+
+  const current = (data?.seasons || []).find((s) => s.isCurrentSeason)
+  if (current?.id && !powerSeasonId.value) powerSeasonId.value = current.id
 }
 
 const applyMatchFilter = async () => {
@@ -889,6 +1040,14 @@ onMounted(async () => {
   fetchCupHistory()
 })
 
+watch(
+  () => route.query.userId,
+  async () => {
+    await fetchUserData()
+    fetchCupHistory()
+  }
+)
+
 onBeforeUnmount(() => {
   resetAvatarCropper()
 })
@@ -970,8 +1129,9 @@ onBeforeUnmount(() => {
               <div class="profile-info">
                 <div class="profile-info-avatar">
                 <div class="profile-avatar-panel">
-                <div class="profile-avatar-kicker">MY PAGE</div>
+                <div class="profile-avatar-kicker">{{ isOwnProfile ? 'MY PAGE' : 'PLAYER' }}</div>
                 <el-upload
+                  v-if="isOwnProfile"
                   ref="avatarUploadRef"
                   class="avatar-upload-trigger"
                   :show-file-list="false"
@@ -990,26 +1150,29 @@ onBeforeUnmount(() => {
                     </div>
                   </template>
                 </el-upload>
-                <p class="profile-avatar-hint">点击头像上传，支持拖拽裁剪</p>
+                <div v-else class="avatar">
+                  <el-avatar :key="userData.avatar" class="profile-avatar-img" :src="avatarDisplayUrl(userData.avatar)" @error="handleAvatarImgError"></el-avatar>
+                </div>
+                <p v-if="isOwnProfile" class="profile-avatar-hint">点击头像上传，支持拖拽裁剪</p>
                 </div>
                 </div>
 
                 <div class="profile-info-content">
                 <div class="user-details" v-if="!isEditing">
-                  <span class="profile-kicker">个人资料</span>
+                  <span class="profile-kicker">{{ isOwnProfile ? '个人资料' : '选手资料' }}</span>
                   <h2>{{ userData.username }}</h2>
                   <div class="user-meta-list">
-                    <p class="user-account"><span class="meta-label">账号</span><strong>{{ userData.account }}</strong></p>
+                    <p class="user-account" v-if="isOwnProfile && userData.account"><span class="meta-label">账号</span><strong>{{ userData.account }}</strong></p>
                     <p class="user-real-name" v-if="userData.real_name"><span class="meta-label">姓名</span><strong>{{ userData.real_name }}</strong></p>
-                    <p class="user-phone" v-if="userData.phone"><span class="meta-label">电话</span><strong>{{ userData.phone }}</strong></p>
-                    <p class="user-address" v-if="userData.address"><span class="meta-label">地址</span><strong>{{ userData.address }}</strong></p>
+                    <p class="user-phone" v-if="isOwnProfile && userData.phone"><span class="meta-label">电话</span><strong>{{ userData.phone }}</strong></p>
+                    <p class="user-address" v-if="isOwnProfile && userData.address"><span class="meta-label">地址</span><strong>{{ userData.address }}</strong></p>
                   </div>
-                  <div class="user-actions">
+                  <div class="user-actions" v-if="isOwnProfile">
                     <el-button type="primary" @click="isEditing = true">编辑资料</el-button>
                   </div>
                 </div>
                 
-                <div class="user-edit" v-else>
+                <div class="user-edit" v-else-if="isOwnProfile">
                   <el-form @submit.prevent="handleSave" label-position="top">
                     <el-form-item label="账号">
                       <el-input v-model="editedUserData.account" disabled />
@@ -1156,7 +1319,7 @@ onBeforeUnmount(() => {
         </el-card>
 
           <div class="pubg-content">
-          <el-card v-if="!isPubgBound" shadow="hover" class="pubg-card pubg-card-bind">
+          <el-card v-if="!isPubgBound && isOwnProfile" shadow="hover" class="pubg-card pubg-card-bind">
             <span class="section-kicker">PUBG ACCOUNT</span>
             <div class="card-heading-stack">
               <h3 class="pubg-card-title">账号绑定</h3>
@@ -1178,13 +1341,21 @@ onBeforeUnmount(() => {
             </el-form>
           </el-card>
 
+          <el-card v-else-if="!isPubgBound" shadow="hover" class="pubg-card pubg-card-bind">
+            <span class="section-kicker">PUBG ACCOUNT</span>
+            <div class="card-heading-stack">
+              <h3 class="pubg-card-title">账号绑定</h3>
+              <p class="pubg-card-desc">该选手尚未绑定 PUBG 账号。</p>
+            </div>
+          </el-card>
+
           <template v-else>
             <el-card shadow="hover" class="pubg-card pubg-card-bind">
               <span class="section-kicker">PUBG ACCOUNT</span>
               <div class="card-title-row">
                 <div class="card-heading-stack">
                   <h3 class="pubg-card-title">账号绑定</h3>
-                  <p class="card-subcopy">同步 PUBG 数据后，战力、统计和对局记录会自动展示。</p>
+                  <p class="card-subcopy">{{ isOwnProfile ? '同步 PUBG 数据后，战力、统计和对局记录会自动展示。' : '展示该选手已绑定的 PUBG 身份与战力数据。' }}</p>
                 </div>
                 <span class="status-pill status-pill-success">已绑定</span>
               </div>
@@ -1193,17 +1364,17 @@ onBeforeUnmount(() => {
                   <span class="bind-meta-label">当前游戏身份</span>
                   <strong class="bind-player-name">{{ userData.pubgBinding.playerName }}</strong>
                   <div class="bind-platform-line">
-                    <span class="platform-pill">{{ userData.pubgBinding.platform.toUpperCase() }}</span>
-                    <span class="bind-sync-note">可同步最新战绩</span>
+                    <span class="platform-pill">{{ (userData.pubgBinding.platform || '').toUpperCase() }}</span>
+                    <span v-if="isOwnProfile" class="bind-sync-note">可同步最新战绩</span>
                   </div>
                 </div>
-                <div class="bind-action-row hero-actions hero-actions-compact">
+                <div v-if="isOwnProfile" class="bind-action-row hero-actions hero-actions-compact">
                   <el-button plain :loading="isRefreshingStats" @click="handleRefreshPubgStats">同步战绩</el-button>
                   <el-button type="warning" plain @click="startRebind">换绑</el-button>
                   <el-button type="danger" plain :loading="pubgLoading" @click="handleUnbindPubg">解绑</el-button>
                 </div>
               </div>
-              <div v-if="isRebinding" class="hero-rebind">
+              <div v-if="isOwnProfile && isRebinding" class="hero-rebind">
                 <el-form label-position="top" @submit.prevent="handleBindPubg">
                   <el-form-item label="新平台">
                     <el-select v-model="pubgBindingForm.platform" style="width: 100%">
@@ -1236,6 +1407,17 @@ onBeforeUnmount(() => {
                 </div>
                 <span class="status-pill">Ranked</span>
               </div>
+              <div v-if="isOwnProfile && powerSeasonOptions.length" class="power-season-row">
+                <span class="power-season-label">赛季</span>
+                <el-select
+                  :model-value="powerSeasonId"
+                  placeholder="当前赛季"
+                  class="power-season-select"
+                  @change="handlePowerSeasonChange"
+                >
+                  <el-option v-for="opt in powerSeasonOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+                </el-select>
+              </div>
               <div class="power-hero" :class="`power-tone-${pubgPowerTone}`" v-loading="pubgPowerLoading">
                 <div class="power-hero-score">
                   <span class="power-score-label">战力值</span>
@@ -1252,12 +1434,33 @@ onBeforeUnmount(() => {
                   <span class="power-hero-level-desc">{{ pubgPowerLevelText }}</span>
                 </div>
               </div>
+              <div v-if="rankedDetailsView || pubgPower?.currentTier" class="power-rank-meta">
+                <div class="power-rank-meta-item">
+                  <span>当前段位</span>
+                  <strong>{{ formatTierLabel(pubgPower?.currentTier || rankedDetailsView?.currentTier) }}</strong>
+                </div>
+                <div class="power-rank-meta-item">
+                  <span>当前 RP</span>
+                  <strong>{{ pubgPower?.currentRankPoint ?? rankedDetailsView?.currentRankPoint ?? '--' }}</strong>
+                </div>
+                <div class="power-rank-meta-item">
+                  <span>最高段位</span>
+                  <strong>{{ formatTierLabel(pubgPower?.bestTier || rankedDetailsView?.bestTier) }}</strong>
+                </div>
+                <div class="power-rank-meta-item">
+                  <span>最高 RP</span>
+                  <strong>{{ pubgPower?.bestRankPoint ?? rankedDetailsView?.bestRankPoint ?? '--' }}</strong>
+                </div>
+              </div>
               <p v-if="pubgPowerSampleHint" class="power-sample-hint">{{ pubgPowerSampleHint }}</p>
               <div class="power-metrics" v-if="pubgPower">
                 <div class="power-metric-item"><span class="power-metric-label">KD</span><span class="power-metric-value">{{ pubgPower.kd }}</span></div>
                 <div class="power-metric-item"><span class="power-metric-label">场均伤害</span><span class="power-metric-value">{{ pubgPower.avgDamage }}</span></div>
                 <div class="power-metric-item"><span class="power-metric-label">四排场次</span><span class="power-metric-value">{{ pubgPower.matchesAnalyzed }}</span></div>
                 <div class="power-metric-item"><span class="power-metric-label">样本置信</span><span class="power-metric-value">{{ pubgPower.confidence != null ? Math.round(pubgPower.confidence * 100) + '%' : '--' }}</span></div>
+                <div class="power-metric-item"><span class="power-metric-label">官方 KDA</span><span class="power-metric-value">{{ pubgPower?.kda ?? rankedDetailsView?.kda ?? '--' }}</span></div>
+                <div class="power-metric-item"><span class="power-metric-label">Top10</span><span class="power-metric-value">{{ formatPct(pubgPower?.top10Ratio ?? rankedDetailsView?.top10Ratio) }}</span></div>
+                <div class="power-metric-item"><span class="power-metric-label">胜率</span><span class="power-metric-value">{{ formatPct(pubgPower?.winRatio ?? rankedDetailsView?.winRatio) }}</span></div>
               </div>
               <button
                 v-if="pubgPower"
@@ -1267,6 +1470,17 @@ onBeforeUnmount(() => {
               >
                 查看计算说明
               </button>
+            </el-card>
+
+            <el-card shadow="hover" class="pubg-card pubg-card-clan" v-loading="clanLoading">
+              <span class="section-kicker">CLAN</span>
+              <h3 class="pubg-card-title">战队</h3>
+              <template v-if="pubgClan">
+                <p class="clan-name">{{ pubgClan.clanName || pubgClan.name || '未命名战队' }}</p>
+                <p class="clan-tag" v-if="pubgClan.clanTag || pubgClan.tag">[{{ pubgClan.clanTag || pubgClan.tag }}]</p>
+                <p class="clan-meta" v-if="pubgClan.memberCount != null">成员 {{ pubgClan.memberCount }}</p>
+              </template>
+              <p v-else class="clan-empty">暂未加入战队</p>
             </el-card>
 
             <el-dialog
@@ -1367,10 +1581,51 @@ onBeforeUnmount(() => {
                   <div class="stats-kpi-foot">每局火力</div>
                 </div>
               </div>
-              <div v-else class="stats-empty">暂无统计数据，点击「同步战绩」获取最新数据</div>
+              <div v-if="currentModeBreakdown" class="mode-breakdown">
+                <h4 class="mode-breakdown-title">模式拆分</h4>
+                <div class="mode-breakdown-grid">
+                  <div
+                    v-for="mode in [
+                      { key: 'solo', label: '单排' },
+                      { key: 'duo', label: '双排' },
+                      { key: 'squad', label: '四排' },
+                    ]"
+                    :key="mode.key"
+                    class="mode-breakdown-card"
+                  >
+                    <strong>{{ mode.label }}</strong>
+                    <span>场次 {{ currentModeBreakdown[mode.key]?.roundsPlayed ?? 0 }}</span>
+                    <span>KD {{ currentModeBreakdown[mode.key]?.kd ?? currentModeBreakdown[mode.key]?.kdRatio ?? '--' }}</span>
+                    <span>胜率 {{ currentModeBreakdown[mode.key]?.winRate != null ? currentModeBreakdown[mode.key].winRate + '%' : (formatPct(currentModeBreakdown[mode.key]?.winRatio)) }}</span>
+                  </div>
+                </div>
+              </div>
+              <div v-if="!pubgDisplay" class="stats-empty">{{ isOwnProfile ? '暂无统计数据，点击「同步战绩」获取最新数据' : '暂无统计数据' }}</div>
             </el-card>
 
-            <el-card shadow="hover" class="pubg-card pubg-card-matches">
+            <el-card shadow="hover" class="pubg-card pubg-card-mastery" v-loading="masteryLoading">
+              <span class="section-kicker">MASTERY</span>
+              <div class="card-title-row">
+                <h3 class="pubg-card-title">精通</h3>
+              </div>
+              <div v-if="pubgMastery?.survival" class="survival-mastery">
+                <span>生存精通 Lv.{{ pubgMastery.survival.level ?? '--' }}</span>
+                <span v-if="pubgMastery.survival.tier">{{ typeof pubgMastery.survival.tier === 'object' ? formatTierLabel(pubgMastery.survival.tier) : pubgMastery.survival.tier }}</span>
+              </div>
+              <div v-if="pubgMastery?.weapon?.weapons?.length" class="weapon-mastery-list">
+                <div v-for="w in pubgMastery.weapon.weapons" :key="w.id" class="weapon-mastery-item">
+                  <strong>{{ w.name }}</strong>
+                  <span>Lv.{{ w.level }}</span>
+                  <span>击杀 {{ w.kills }}</span>
+                </div>
+              </div>
+              <p
+                v-if="!masteryLoading && !pubgMastery?.survival && !pubgMastery?.weapon?.weapons?.length"
+                class="mastery-empty"
+              >暂无精通数据</p>
+            </el-card>
+
+            <el-card v-if="isOwnProfile" shadow="hover" class="pubg-card pubg-card-matches">
               <div class="match-card-top">
                 <div class="card-heading-stack">
                   <span class="section-kicker">MATCH LOG</span>
@@ -2906,9 +3161,157 @@ onBeforeUnmount(() => {
 
 .power-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(4.8rem, 1fr));
   gap: 0.55rem;
   margin-top: 0.85rem;
+}
+
+.power-season-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0 0 0.85rem;
+}
+
+.power-season-label {
+  flex-shrink: 0;
+  font-size: 0.78rem;
+  color: #8a7c6c;
+  font-weight: 600;
+}
+
+.power-season-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.power-rank-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+}
+
+.power-rank-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 12px;
+  border: 1px solid rgba(111, 96, 78, 0.1);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.power-rank-meta-item span {
+  font-size: 0.7rem;
+  color: #9a8c7d;
+}
+
+.power-rank-meta-item strong {
+  font-size: 0.95rem;
+  color: #2f3b35;
+  font-weight: 700;
+}
+
+.mode-breakdown {
+  margin-top: 1rem;
+}
+
+.mode-breakdown-title {
+  margin: 0 0 0.65rem;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #2d2924;
+}
+
+.mode-breakdown-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.mode-breakdown-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 14px;
+  border: 1px solid rgba(111, 96, 78, 0.1);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.mode-breakdown-card strong {
+  font-size: 0.88rem;
+  color: #2f3b35;
+  margin-bottom: 0.15rem;
+}
+
+.mode-breakdown-card span {
+  font-size: 0.75rem;
+  color: #8a7c6c;
+  line-height: 1.35;
+}
+
+.pubg-card-clan .clan-name {
+  margin: 0.15rem 0 0.35rem;
+  font-size: 1.2rem;
+  font-weight: 800;
+  color: #2f3b35;
+}
+
+.pubg-card-clan .clan-tag {
+  margin: 0 0 0.35rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #5c6b5a;
+}
+
+.pubg-card-clan .clan-meta,
+.pubg-card-clan .clan-empty,
+.mastery-empty {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #8a7c6c;
+}
+
+.survival-mastery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 1rem;
+  margin-bottom: 0.85rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: 12px;
+  border: 1px solid rgba(111, 96, 78, 0.1);
+  background: #f8f3ea;
+  font-size: 0.88rem;
+  color: #2f3b35;
+  font-weight: 600;
+}
+
+.weapon-mastery-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.55rem;
+}
+
+.weapon-mastery-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: 12px;
+  border: 1px solid rgba(111, 96, 78, 0.1);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.weapon-mastery-item strong {
+  font-size: 0.88rem;
+  color: #2f3b35;
+}
+
+.weapon-mastery-item span {
+  font-size: 0.74rem;
+  color: #8a7c6c;
 }
 
 .power-metric-item {
@@ -3830,7 +4233,8 @@ onBeforeUnmount(() => {
 }
 
 .pubg-card-stats,
-.pubg-card-matches {
+.pubg-card-matches,
+.pubg-card-mastery {
   grid-column: 1 / -1;
 }
 
@@ -4766,6 +5170,14 @@ onBeforeUnmount(() => {
   .pubg-card-power .power-hero-level {
     min-height: 7.2rem;
   }
+
+  .mode-breakdown-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .power-rank-meta {
+    grid-template-columns: 1fr;
+  }
 }
 
 .dark-mode .pubg-card-power .power-hero-score {
@@ -5534,7 +5946,8 @@ onBeforeUnmount(() => {
 }
 
 .pubg-card-stats,
-.pubg-card-matches {
+.pubg-card-matches,
+.pubg-card-mastery {
   grid-column: 1 / -1;
 }
 

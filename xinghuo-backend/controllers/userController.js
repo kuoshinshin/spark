@@ -3,7 +3,20 @@ const fs = require('fs').promises;
 const UserModel = require('../models/userModel');
 const EventModel = require('../models/eventModel');
 const ChatModel = require('../models/chatModel');
-const { getPlayerByName, getLifetimeStats, getRecentMatches, getMatchesBySeason, getCompetitivePowerScore, getMatchById, getSeasons, parsePlayerStatsFromMatch, parseMatchDetailWithTeam } = require('../services/pubgApi');
+const {
+  getPlayerByName,
+  getLifetimeStats,
+  getRecentMatches,
+  getMatchesBySeason,
+  getCompetitivePowerScore,
+  getWeaponMastery,
+  getSurvivalMastery,
+  getPlayerClan,
+  getMatchById,
+  getSeasons,
+  parsePlayerStatsFromMatch,
+  parseMatchDetailWithTeam,
+} = require('../services/pubgApi');
 const { getOrRefresh, invalidateUserCache } = require('../services/pubgCacheService');
 const pubgStatsCache = new Map();
 const PUBG_STATS_CACHE_TTL = 2 * 60 * 1000;
@@ -13,6 +26,8 @@ const PUBG_CACHE_TTL_POWER_MS = 20 * 60 * 1000;
 const PUBG_CACHE_TTL_OVERVIEW_MS = 20 * 60 * 1000;
 const PUBG_CACHE_TTL_SEASONS_MS = 20 * 60 * 1000;
 const PUBG_CACHE_TTL_MATCHES_MS = 20 * 60 * 1000;
+const PUBG_CACHE_TTL_MASTERY_MS = 20 * 60 * 1000;
+const PUBG_CACHE_TTL_CLAN_MS = 20 * 60 * 1000;
 
 const toPublicUser = (user) => {
   const {
@@ -232,6 +247,115 @@ class UserController {
     } catch (error) {
       console.error('获取用户信息失败:', error);
       res.status(500).json({ error: '获取用户信息失败，请联系管理员' });
+    }
+  }
+
+  /** 查看其他选手公开主页（不含电话/地址等隐私字段） */
+  static async getPublicProfile(req, res) {
+    try {
+      const targetId = Number(req.params.id);
+      if (!Number.isFinite(targetId) || targetId <= 0) {
+        return res.status(400).json({ error: '无效的用户 ID' });
+      }
+
+      const user = await UserModel.findById(targetId);
+      if (!user) {
+        return res.status(404).json({ error: '用户不存在' });
+      }
+
+      const pubgBinding = UserController.normalizePubgBinding(user);
+      let pubgStats = null;
+      if (pubgBinding.playerId && pubgBinding.platform) {
+        try {
+          pubgStats = await getOrRefresh({
+            userId: targetId,
+            cacheKey: UserController.buildPubgCacheKey(pubgBinding, 'overview'),
+            ttlMs: PUBG_CACHE_TTL_OVERVIEW_MS,
+            fetcher: () => getLifetimeStats(pubgBinding.platform, pubgBinding.playerId),
+          });
+        } catch (error) {
+          console.warn('公开主页获取 PUBG 战绩失败:', error?.message || error);
+        }
+      }
+
+      const powerCacheRow = await UserModel.getPubgPowerCache(targetId);
+      let pubgPower = EventModel.parsePowerCacheEntry(powerCacheRow?.pubg_power_cached_json);
+      try {
+        const raw = powerCacheRow?.pubg_power_cached_json;
+        const full = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (full && Number(full.score) > 0) {
+          pubgPower = { ...pubgPower, ...full };
+        }
+      } catch (_) {}
+
+      let pubgMastery = null;
+      let pubgClan = null;
+      if (pubgBinding.playerId && pubgBinding.platform) {
+        try {
+          pubgMastery = await getOrRefresh({
+            userId: targetId,
+            cacheKey: UserController.buildPubgCacheKey(pubgBinding, 'mastery'),
+            ttlMs: PUBG_CACHE_TTL_MASTERY_MS,
+            fetcher: async () => {
+              const [weapon, survival] = await Promise.all([
+                getWeaponMastery(pubgBinding.platform, pubgBinding.playerId),
+                getSurvivalMastery(pubgBinding.platform, pubgBinding.playerId),
+              ]);
+              return { weapon, survival };
+            },
+          });
+        } catch (error) {
+          console.warn('公开主页获取精通失败:', error?.message || error);
+        }
+        try {
+          pubgClan = await getOrRefresh({
+            userId: targetId,
+            cacheKey: UserController.buildPubgCacheKey(pubgBinding, 'clan'),
+            ttlMs: PUBG_CACHE_TTL_CLAN_MS,
+            fetcher: async () => {
+              const clan = await getPlayerClan(pubgBinding.platform, pubgBinding.playerId);
+              return { clan };
+            },
+          });
+        } catch (error) {
+          console.warn('公开主页获取战队失败:', error?.message || error);
+        }
+      }
+
+      let cupHistory = {
+        summary: { seasonsPlayed: 0, championships: 0, bestRank: null, totalKills: 0 },
+        seasons: [],
+      };
+      try {
+        cupHistory = await EventModel.getUserCupHistory(targetId);
+      } catch (error) {
+        console.warn('公开主页获取杯赛战绩失败:', error?.message || error);
+      }
+
+      let avatar = typeof user.avatar === 'string' ? user.avatar.trim() : '';
+      if (!avatar || avatar.includes('trae-api-cn.mchost.guru')) {
+        avatar = '/default-avatar.svg';
+      }
+
+      return res.json({
+        user: {
+          id: user.id,
+          username: user.username,
+          avatar,
+          role: user.role,
+          real_name: user.real_name || '',
+          created_at: user.created_at,
+        },
+        pubgBinding,
+        pubgStats,
+        pubgPower,
+        pubgMastery,
+        pubgClan: pubgClan?.clan || null,
+        cupHistory,
+      });
+    } catch (error) {
+      console.error('获取公开主页失败:', error);
+      return res.status(500).json({ error: '获取公开主页失败' });
     }
   }
   
@@ -711,41 +835,115 @@ class UserController {
     try {
       const userId = req.user.id;
       const forceRefresh = ['1', 'true', 'yes'].includes(String(req.query?.force || '').toLowerCase());
+      const requestedSeason = String(req.query?.season || '').trim();
       const user = await UserModel.findById(userId);
       const binding = UserController.normalizePubgBinding(user);
       if (!binding.playerId || !binding.platform) {
         return res.status(400).json({ error: '当前账号尚未绑定 PUBG' });
       }
 
+      let currentSeasonId = '';
+      try {
+        const seasons = await getSeasons(binding.platform);
+        currentSeasonId = seasons.find((item) => item?.isCurrentSeason)?.id || '';
+      } catch (_) {
+        currentSeasonId = '';
+      }
+
+      const isCurrentSeason = !requestedSeason || !currentSeasonId || requestedSeason === currentSeasonId;
+      const seasonForFetch = isCurrentSeason ? '' : requestedSeason;
+      const cacheKeyExtra = isCurrentSeason ? '' : requestedSeason;
+
+      const fetchPower = async () => {
+        const fresh = await getCompetitivePowerScore(binding.platform, binding.playerId, seasonForFetch);
+        if (isCurrentSeason) {
+          await UserModel.savePubgPowerCache(userId, fresh);
+        }
+        return fresh;
+      };
+
       const power = forceRefresh
         ? await (async () => {
-            const fresh = await getCompetitivePowerScore(binding.platform, binding.playerId);
-            await UserModel.savePubgPowerCache(userId, fresh);
-            await getOrRefresh({
-              userId,
-              cacheKey: UserController.buildPubgCacheKey(binding, 'power'),
-              ttlMs: 0,
-              fetcher: async () => fresh,
-              allowStaleOnError: false,
-            });
+            const fresh = await fetchPower();
+            if (isCurrentSeason) {
+              await getOrRefresh({
+                userId,
+                cacheKey: UserController.buildPubgCacheKey(binding, 'power', cacheKeyExtra),
+                ttlMs: 0,
+                fetcher: async () => fresh,
+                allowStaleOnError: false,
+              });
+            }
             return fresh;
           })()
         : await getOrRefresh({
             userId,
-            cacheKey: UserController.buildPubgCacheKey(binding, 'power'),
+            cacheKey: UserController.buildPubgCacheKey(binding, 'power', cacheKeyExtra),
             ttlMs: PUBG_CACHE_TTL_POWER_MS,
-            fetcher: async () => {
-              const fresh = await getCompetitivePowerScore(binding.platform, binding.playerId);
-              await UserModel.savePubgPowerCache(userId, fresh);
-              return fresh;
-            },
+            fetcher: fetchPower,
           });
-      try {
-        await EventModel.syncUserSparkScore(userId, power?.score);
-      } catch (syncError) {
-        console.warn('同步报名星火战力失败:', syncError?.message || syncError);
+
+      if (isCurrentSeason) {
+        try {
+          await EventModel.syncUserSparkScore(userId, power?.score);
+        } catch (syncError) {
+          console.warn('同步报名星火战力失败:', syncError?.message || syncError);
+        }
       }
       return res.json(power);
+    } catch (error) {
+      const mapped = UserController.mapPubgError(error);
+      return res.status(mapped.statusCode).json({ error: mapped.message });
+    }
+  }
+
+  static async getPubgMastery(req, res) {
+    try {
+      const userId = req.user.id;
+      const user = await UserModel.findById(userId);
+      const binding = UserController.normalizePubgBinding(user);
+      if (!binding.playerId || !binding.platform) {
+        return res.status(400).json({ error: '当前账号尚未绑定 PUBG' });
+      }
+
+      const payload = await getOrRefresh({
+        userId,
+        cacheKey: UserController.buildPubgCacheKey(binding, 'mastery'),
+        ttlMs: PUBG_CACHE_TTL_MASTERY_MS,
+        fetcher: async () => {
+          const [weapon, survival] = await Promise.all([
+            getWeaponMastery(binding.platform, binding.playerId),
+            getSurvivalMastery(binding.platform, binding.playerId),
+          ]);
+          return { weapon, survival };
+        },
+      });
+      return res.json(payload);
+    } catch (error) {
+      const mapped = UserController.mapPubgError(error);
+      return res.status(mapped.statusCode).json({ error: mapped.message });
+    }
+  }
+
+  static async getPubgClan(req, res) {
+    try {
+      const userId = req.user.id;
+      const user = await UserModel.findById(userId);
+      const binding = UserController.normalizePubgBinding(user);
+      if (!binding.playerId || !binding.platform) {
+        return res.status(400).json({ error: '当前账号尚未绑定 PUBG' });
+      }
+
+      const payload = await getOrRefresh({
+        userId,
+        cacheKey: UserController.buildPubgCacheKey(binding, 'clan'),
+        ttlMs: PUBG_CACHE_TTL_CLAN_MS,
+        fetcher: async () => {
+          const clan = await getPlayerClan(binding.platform, binding.playerId);
+          return { clan };
+        },
+      });
+      return res.json(payload);
     } catch (error) {
       const mapped = UserController.mapPubgError(error);
       return res.status(mapped.statusCode).json({ error: mapped.message });

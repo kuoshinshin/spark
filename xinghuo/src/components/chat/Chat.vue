@@ -121,6 +121,7 @@ const postImageInputRef = ref(null)
 
 // 评论相关
 const commentInputs = ref({})
+const commentSubmitting = ref({})
 
 // 编辑相关
 const showEditModal = ref(false)
@@ -768,48 +769,67 @@ const toggleLike = async (postId) => {
 }
 
 // 发表评论
-const addComment = async (postId) => {
+const addComment = async (postId, event) => {
+  if (event?.isComposing || event?.keyCode === 229) return
+
   const post = posts.value.find(p => p.id === postId)
-  const commentContent = commentInputs.value[postId]
-  
-  if (post && commentContent && commentContent.trim()) {
-    try {
-      // 检查用户是否登录
-      const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true'
-      if (!isLoggedIn) {
-        ElMessage.warning('请先登录后再评论')
-        return
-      }
-      
-      // 调用后端API添加评论
-      const response = await chatApi.addComment(postId, commentContent.trim())
-      
-      // 添加新评论到列表
-      const newComment = {
-        id: response.id,
-        user: currentUser.value,
-        content: commentContent.trim(),
-        timestamp: '刚刚'
-      }
-      
-      if (!post.comments) {
-        post.comments = []
-      }
-      post.comments.push(newComment)
-      commentInputs.value[postId] = ''
-      
-      mergeUserDataToStorage({
-        username: currentUser.value.name,
-        avatar: currentUser.value.avatar,
-        id: currentUser.value.id
-      })
-      
-      // 更新过滤后的帖子
-      applySearchAndSort()
-    } catch (error) {
-      console.error('发表评论失败:', error)
-      ElMessage.error('发表评论失败，请联系管理员')
+  const commentContent = String(commentInputs.value[postId] || '').trim()
+
+  if (!post || !commentContent) return
+  if (commentSubmitting.value[postId]) return
+
+  try {
+    const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true'
+    if (!isLoggedIn) {
+      ElMessage.warning('请先登录后再评论')
+      return
     }
+
+    commentSubmitting.value[postId] = true
+    commentInputs.value[postId] = ''
+
+    const response = await chatApi.addComment(postId, commentContent)
+
+    // 后端短时去重会返回已有评论；本地已存在则不再追加
+    const commentId = response?.id
+    if (commentId && post.comments?.some((c) => Number(c.id) === Number(commentId))) {
+      applySearchAndSort()
+      return
+    }
+
+    const newComment = {
+      id: commentId,
+      user: {
+        id: response?.user_id || currentUser.value.id,
+        name: response?.username || currentUser.value.name,
+        avatar: normalizeAvatar(response?.avatar || currentUser.value.avatar),
+      },
+      content: response?.content || commentContent,
+      timestamp: response?.created_at || '刚刚',
+      likes: 0,
+    }
+
+    if (!post.comments) {
+      post.comments = []
+    }
+    post.comments.push(newComment)
+    if (commentId) {
+      commentLikes.value[commentId] = 0
+    }
+
+    mergeUserDataToStorage({
+      username: currentUser.value.name,
+      avatar: currentUser.value.avatar,
+      id: currentUser.value.id
+    })
+
+    applySearchAndSort()
+  } catch (error) {
+    console.error('发表评论失败:', error)
+    commentInputs.value[postId] = commentContent
+    ElMessage.error(error?.message || '发表评论失败，请联系管理员')
+  } finally {
+    commentSubmitting.value[postId] = false
   }
 }
 
@@ -1270,14 +1290,16 @@ watch(
                       placeholder="说点什么..."
                       clearable
                       class="comment-field-input"
-                      @keyup.enter="addComment(post.id)"
+                      :disabled="!!commentSubmitting[post.id]"
+                      @keydown.enter.exact.prevent="addComment(post.id, $event)"
                     />
                     <el-button
                       type="primary"
                       circle
                       class="send-comment-button"
                       @click="addComment(post.id)"
-                      :disabled="!String(commentInputs[post.id] || '').trim()"
+                      :loading="!!commentSubmitting[post.id]"
+                      :disabled="!!commentSubmitting[post.id] || !String(commentInputs[post.id] || '').trim()"
                     >
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                         <path d="M22 2L11 13M22 2L15 22L11 13M22 2H2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>

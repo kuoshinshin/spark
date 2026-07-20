@@ -169,23 +169,29 @@ class ChatController {
     try {
       const userId = req.user.id;
       const { postId, content } = req.body;
+      const trimmed = typeof content === 'string' ? content.trim() : '';
       
-      if (!postId || !content || content.trim() === '') {
+      if (!postId || !trimmed) {
         return res.status(400).json({ error: '帖子ID和评论内容不能为空' });
       }
+
+      const duplicate = await ChatModel.findRecentDuplicateComment(postId, userId, trimmed, 20);
+      if (duplicate) {
+        return res.status(200).json({ ...duplicate, duplicated: true });
+      }
       
-      const result = await ChatModel.createComment(postId, userId, content);
-      
-      // 获取新创建的评论（包含完整信息）
-      const comments = await ChatModel.getComments(postId);
-      const newComment = comments[comments.length - 1];
+      const result = await ChatModel.createComment(postId, userId, trimmed);
+      const newComment = await ChatModel.getCommentById(result.insertId);
+      if (!newComment) {
+        return res.status(500).json({ error: '创建评论失败，请联系管理员' });
+      }
 
       const recipientUserId = await ChatModel.getPostOwnerId(postId);
       await NotificationModel.create({
         recipientUserId,
         actorUserId: userId,
         postId,
-        commentId: newComment?.id || null,
+        commentId: newComment.id,
         type: 'post_comment',
       });
       

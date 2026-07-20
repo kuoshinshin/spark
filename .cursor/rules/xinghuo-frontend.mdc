@@ -1,0 +1,14 @@
+---
+description: 前端 Vue 性能与交互优化约定
+globs: xinghuo/**/*.{vue,js}
+alwaysApply: false
+---
+
+# 前端优化
+
+- 评论/发帖/点赞等写操作：提交中加锁，按钮 loading，IME 组字时勿触发 Enter 提交。
+- 列表渲染使用稳定唯一 `key`（优先业务 id）；勿用可能重复的 `undefined`。
+- 路由页用懒加载；大弹层/图表勿塞进首屏同步包。
+- 轮询间隔合理，页面不可见时暂停；避免同一数据多处并行重复请求。
+- 头像/圈子图用 `avatarDisplayUrl` / `/api/media`，勿依赖会被静态规则抢走的直链。
+- 从战力榜/圈子进主页：带 `?userId=`，Profile 必须读公开资料而非 `/user/info`。

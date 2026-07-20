@@ -1,0 +1,14 @@
+---
+description: 后端 Node/PUBG 性能与数据安全约定
+globs: xinghuo-backend/**/*.js
+alwaysApply: false
+---
+
+# 后端优化
+
+- PUBG 外部请求一律经 `getOrRefresh`（或同等缓存）；预热用 `Promise.allSettled`，限制并发。
+- 官方对局列表上限约 32 场 / 14 天；战力优先用赛季聚合，勿假设能拉 200 场明细。
+- 评论等同内容短时去重；点赞类用唯一索引防重复行。
+- 禁止循环内串行打库/打 API（N+1）；批量用单次查询或受控并发。
+- `getPubgPower`：仅当前赛季写入 `pubg_power_cached_json` 并同步报名战力；历史赛季只读返回。
+- 公开主页接口勿返回电话/地址；错误映射保持稳定 status，避免把 429/超时当 500 糊弄。

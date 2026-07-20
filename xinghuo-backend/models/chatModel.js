@@ -176,6 +176,37 @@ class ChatModel {
     return result;
   }
 
+  /** 短时内同帖同用户同内容视为重复提交 */
+  static async findRecentDuplicateComment(postId, userId, content, withinSeconds = 20) {
+    const windowSec = Math.max(1, Math.min(120, Number(withinSeconds) || 20));
+    const [rows] = await pool.execute(
+      `SELECT post_comments.*, users.username, users.avatar
+       FROM post_comments
+       JOIN users ON post_comments.user_id = users.id
+       WHERE post_comments.post_id = ?
+         AND post_comments.user_id = ?
+         AND post_comments.parent_id IS NULL
+         AND post_comments.content = ?
+         AND post_comments.created_at >= DATE_SUB(NOW(), INTERVAL ${windowSec} SECOND)
+       ORDER BY post_comments.id DESC
+       LIMIT 1`,
+      [postId, userId, content]
+    );
+    return rows[0] || null;
+  }
+
+  static async getCommentById(commentId) {
+    const [rows] = await pool.execute(
+      `SELECT post_comments.*, users.username, users.avatar
+       FROM post_comments
+       JOIN users ON post_comments.user_id = users.id
+       WHERE post_comments.id = ?
+       LIMIT 1`,
+      [commentId]
+    );
+    return rows[0] || null;
+  }
+
   // 获取帖子的评论
   static async getComments(postId) {
     const [rows] = await pool.execute(
