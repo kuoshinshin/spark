@@ -482,6 +482,9 @@ const fetchUserData = async () => {
     }
   } catch (error) {
     errorMessage.value = error.message || '获取用户信息失败'
+    if (String(error.message || '').includes('接口不存在')) {
+      errorMessage.value = '选手主页接口未就绪，请确认服务器已部署最新后端并重启 PM2'
+    }
     console.error('获取用户信息失败:', error)
     // 设置默认数据
     setDefaultUserData()
