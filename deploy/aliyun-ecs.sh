@@ -112,9 +112,10 @@ kill_port_holders() {
     fuser -k "${PORT_NUM}/tcp" 2>/dev/null || sudo fuser -k "${PORT_NUM}/tcp" 2>/dev/null || true
   fi
   if command -v ss >/dev/null 2>&1; then
-    pids="$(ss -lntp "sport = :${PORT_NUM}" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u | tr '\n' ' ')"
+    # 无监听时 grep 退出码为 1；在 pipefail 下必须吞掉，否则会在 pm2 start 前误退出
+    pids="$(ss -lntp "sport = :${PORT_NUM}" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u | tr '\n' ' ' || true)"
   elif command -v lsof >/dev/null 2>&1; then
-    pids="$(lsof -t -iTCP:"${PORT_NUM}" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ')"
+    pids="$(lsof -t -iTCP:"${PORT_NUM}" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' || true)"
   fi
   for pid in $pids; do
     [[ -n "$pid" ]] || continue
