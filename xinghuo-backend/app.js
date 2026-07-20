@@ -125,7 +125,17 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', message: '服务运行正常' });
+  // 指纹用于部署冒烟：旧进程没有这些字段 / routes
+  res.json({
+    status: 'ok',
+    message: '服务运行正常',
+    port: Number(PORT),
+    routes: {
+      publicProfile: true,
+      pubgClan: true,
+      pubgMastery: true,
+    },
+  });
 });
 
 async function startServer() {

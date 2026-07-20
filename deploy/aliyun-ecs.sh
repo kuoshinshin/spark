@@ -93,37 +93,80 @@ if ! grep -q "public/:id" "$BACKEND_DIR/routes/user.js" \
 fi
 log "路由文件校验通过: $BACKEND_DIR/routes/user.js"
 
-# 查出占用 PORT 的进程，避免 root/ubuntu 两套 PM2 抢端口导致「重启了仍是旧进程」
-PORT_NUM="$(node -e "require('dotenv').config({path:'$BACKEND_DIR/.env'}); process.stdout.write(String(process.env.PORT||3000))" 2>/dev/null || echo 3000)"
-if command -v ss >/dev/null 2>&1; then
-  log "当前监听 ${PORT_NUM} 的进程："
-  ss -lntp "sport = :${PORT_NUM}" 2>/dev/null || true
-elif command -v lsof >/dev/null 2>&1; then
-  lsof -iTCP:"${PORT_NUM}" -sTCP:LISTEN 2>/dev/null || true
-fi
+# 从 .env 读 PORT（不依赖 cwd 下的 dotenv）
+PORT_NUM="$(
+  awk -F= '/^[[:space:]]*PORT[[:space:]]*=/ {
+    v=$2; gsub(/\r/,"",v); gsub(/^[[:space:]]+|[[:space:]]+$/,"",v);
+    gsub(/^["'\'']|["'\'']$/,"",v); print v; exit
+  }' "$BACKEND_DIR/.env" 2>/dev/null || true
+)"
+PORT_NUM="${PORT_NUM:-3000}"
+log "目标 PORT=${PORT_NUM} cwd=$BACKEND_DIR"
 
-# 强制按本仓库 ecosystem 重建进程（reload 不会纠正错误的 cwd/script）
+list_port_holders() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -lntp "sport = :${PORT_NUM}" 2>/dev/null || true
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -iTCP:"${PORT_NUM}" -sTCP:LISTEN 2>/dev/null || true
+  fi
+}
+
+kill_port_holders() {
+  local pids=""
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -k "${PORT_NUM}/tcp" 2>/dev/null || sudo fuser -k "${PORT_NUM}/tcp" 2>/dev/null || true
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    pids="$(ss -lntp "sport = :${PORT_NUM}" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u | tr '\n' ' ')"
+  elif command -v lsof >/dev/null 2>&1; then
+    pids="$(lsof -t -iTCP:"${PORT_NUM}" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ')"
+  fi
+  for pid in $pids; do
+    [[ -n "$pid" ]] || continue
+    log "终止占用 ${PORT_NUM} 的进程 pid=${pid}"
+    kill "$pid" 2>/dev/null || sudo kill "$pid" 2>/dev/null || true
+    sleep 1
+    kill -9 "$pid" 2>/dev/null || sudo kill -9 "$pid" 2>/dev/null || true
+  done
+}
+
+log "释放端口前监听者："
+list_port_holders
+
+# 两边 PM2 都删掉，避免 root/ubuntu 双实例
 pm2 delete xinghuo-api >/dev/null 2>&1 || true
+sudo pm2 delete xinghuo-api >/dev/null 2>&1 || true
+kill_port_holders
+sleep 1
+
+log "释放端口后监听者："
+list_port_holders
+
+# 强制按本仓库 ecosystem 重建进程
 pm2 start deploy/ecosystem.config.cjs --only xinghuo-api
 pm2 save
+pm2 describe xinghuo-api | sed -n '1,40p' || true
 
-# 确认新路由已挂载（避免前端已更新、后端仍是旧进程）
+# 确认新路由已挂载（未带 token 必须是 401；000/404 一律失败）
 log "冒烟检查后端新接口 …"
 sleep 2
-if curl -fsS --max-time 8 "http://127.0.0.1:${PORT_NUM}/health" >/dev/null 2>&1; then
-  log "health ok (port ${PORT_NUM})"
-else
-  log "警告：health 检查失败，请手动 pm2 logs xinghuo-api"
+health_body="$(curl -fsS --max-time 8 "http://127.0.0.1:${PORT_NUM}/health" 2>/dev/null || true)"
+log "health body: ${health_body:-<empty>}"
+if ! printf '%s' "$health_body" | grep -q '"pubgClan":true'; then
+  log "错误：health 缺少 routes.pubgClan（仍是旧进程，或未监听 ${PORT_NUM}）"
+  list_port_holders
+  pm2 logs xinghuo-api --lines 40 --nostream || true
+  exit 1
 fi
-# 未带 token 时期望 401，而非 404「接口不存在」
+
 code_public="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "http://127.0.0.1:${PORT_NUM}/api/user/public/1" || true)"
 code_clan="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "http://127.0.0.1:${PORT_NUM}/api/user/pubg/clan" || true)"
 code_mastery="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "http://127.0.0.1:${PORT_NUM}/api/user/pubg/mastery" || true)"
-log "路由探测 HTTP: public=${code_public} clan=${code_clan} mastery=${code_mastery}（期望 401，若为 404 说明后端未加载新路由）"
-if [[ "$code_public" == "404" || "$code_clan" == "404" || "$code_mastery" == "404" ]]; then
-  log "错误：新接口仍 404。常见原因：root 与 ubuntu 各跑一套 PM2，3000 端口被旧进程占用。"
-  log "请执行: sudo ss -lntp 'sport = :${PORT_NUM}' ; sudo pm2 list ; pm2 list"
-  log "然后杀掉占用端口的旧 node，再在正确用户下: cd $ROOT && pm2 start deploy/ecosystem.config.cjs --only xinghuo-api"
+log "路由探测 HTTP: public=${code_public} clan=${code_clan} mastery=${code_mastery}（必须全部为 401）"
+if [[ "$code_public" != "401" || "$code_clan" != "401" || "$code_mastery" != "401" ]]; then
+  log "错误：新接口未就绪。请检查是否 root/ubuntu 双 PM2，或 Nginx upstream 端口不是 ${PORT_NUM}。"
+  list_port_holders
+  pm2 logs xinghuo-api --lines 40 --nostream || true
   exit 1
 fi
 

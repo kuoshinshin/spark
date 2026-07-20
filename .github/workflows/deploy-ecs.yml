@@ -7,6 +7,7 @@
 # 可选：
 #   DEPLOY_SSH_PORT  默认 22
 #   DEPLOY_PATH      服务器上仓库绝对路径，默认 /opt/spark
+#   DEPLOY_PUBLIC_URL  公网站点根，默认 https://sparksquad.club（用于部署后外网冒烟）
 
 name: Deploy to Aliyun ECS
 
@@ -30,6 +31,9 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_SSH_PORT || 22 }}
+          script_stop: true
+          command_timeout: 20m
           script: |
             set -euo pipefail
             DEPLOY_PATH='${{ secrets.DEPLOY_PATH }}'
@@ -38,3 +42,26 @@ jobs:
             fi
             cd "$DEPLOY_PATH"
             bash deploy/aliyun-ecs.sh
+
+      - name: Public smoke (must be 401, not 404)
+        env:
+          PUBLIC_URL: ${{ secrets.DEPLOY_PUBLIC_URL }}
+        run: |
+          set -euo pipefail
+          BASE="${PUBLIC_URL:-https://sparksquad.club}"
+          BASE="${BASE%/}"
+          echo "Checking $BASE ..."
+          health="$(curl -fsS --max-time 20 "$BASE/health" || true)"
+          echo "health: $health"
+          echo "$health" | grep -q '"pubgClan":true'
+
+          for path in /api/user/public/1 /api/user/pubg/clan /api/user/pubg/mastery; do
+            code="$(curl -sS -o /tmp/body.txt -w '%{http_code}' --max-time 20 "$BASE$path" || true)"
+            body="$(cat /tmp/body.txt || true)"
+            echo "$path -> $code $body"
+            if [ "$code" != "401" ]; then
+              echo "::error::$path expected 401, got $code (404=旧后端未挂载新路由)"
+              exit 1
+            fi
+          done
+          echo "Public smoke OK"
