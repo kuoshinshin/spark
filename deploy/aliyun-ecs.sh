@@ -94,12 +94,7 @@ fi
 log "路由文件校验通过: $BACKEND_DIR/routes/user.js"
 
 # 从 .env 读 PORT（不依赖 cwd 下的 dotenv）
-PORT_NUM="$(
-  awk -F= '/^[[:space:]]*PORT[[:space:]]*=/ {
-    v=$2; gsub(/\r/,"",v); gsub(/^[[:space:]]+|[[:space:]]+$/,"",v);
-    gsub(/^["'\'']|["'\'']$/,"",v); print v; exit
-  }' "$BACKEND_DIR/.env" 2>/dev/null || true
-)"
+PORT_NUM="$(grep -E '^[[:space:]]*PORT=' "$BACKEND_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '[:space:]\"' || true)"
 PORT_NUM="${PORT_NUM:-3000}"
 log "目标 PORT=${PORT_NUM} cwd=$BACKEND_DIR"
 
